@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第3章 词法分析基础</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html" class="active">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第3章 词法分析基础</h2>
+
+        <p>大家好，我是你们的讲师。从这一章开始，我们将正式踏入编译器的内部世界。编译器的第一道工序叫做<strong>词法分析（Lexical Analysis）</strong>——它把源代码（一串字符）拆分为一个个有意义的"单词"，也就是<strong>Token</strong>。</p>
+
+        <p>你可能会觉得这不就是"字符串分割"吗？有什么难的？但真实情况远比你想象的精妙。一个编程语言的关键字有几十个，标识符的命名规则复杂多样，数字字面量有整数、浮点、科学计数法、十六进制，字符串里还有转义序列……要高效且无歧义地处理所有这些情况，需要一套严谨的理论工具。这套工具就是<strong>正则表达式</strong>和<strong>有限自动机</strong>。</p>
+
+        <div class="highlight">
+            <strong>为什么词法分析值得单独研究？</strong>将词法分析与后续的语法分析分离，是编译器设计中最重要的架构决策之一。词法分析器的实现简单、高效（可以用一个有限状态机在O(n)时间内完成），而且它可以大幅简化语法分析器的设计——语法分析器不需要关心空格、注释、标识符的字符级细节。这种"分层"思想贯穿了整个编译器设计。
+        </div>
+
+        <h2>词法分析的作用</h2>
+
+        <p>词法分析器的输入是<strong>源代码字符串</strong>，输出是<strong>Token序列</strong>。每个Token包含类型和值两个基本信息。比如对于下面这段简单的代码：</p>
+
+        <pre><code>int main() {
+    return 42;
+}</code></pre>
+
+        <p>词法分析器会生成这样的Token序列：</p>
+
+        <pre><code>&lt;KEYWORD: "int"&gt;
+&lt;IDENTIFIER: "main"&gt;
+&lt;LPAREN: "("&gt;
+&lt;RPAREN: ")"&gt;
+&lt;LBRACE: "{"&gt;
+&lt;KEYWORD: "return"&gt;
+&lt;INT_LITERAL: 42&gt;
+&lt;SEMICOLON: ";"&gt;
+&lt;RBRACE: "}"&gt;
+&lt;EOF&gt;</code></pre>
+
+        <p>词法分析阶段做了以下几件重要的事情：</p>
+
+        <ul>
+            <li><strong>去噪音：</strong>过滤掉空格、换行、注释等不影响程序语义的字符。</li>
+            <li><strong>归类：</strong>将字符序列归类为关键字、标识符、字面量、运算符、分隔符等类型。</li>
+            <li><strong>预处理：</strong>对于数字字面量，从字符串格式转换为数值（比如"0xFF"转换为255）。</li>
+            <li><strong>标记位置：</strong>记录每个Token在源代码中的行列号，方便后续的错误报告。</li>
+        </ul>
+
+        <p>一个高效的词法分析器可以轻松达到每秒处理数百万行代码的速度。事实上，词法分析是整个编译流水线中最快的阶段——它通常只占用总编译时间的5%左右。</p>
+
+        <h2>正则表达式入门</h2>
+
+        <p>词法分析的核心工具是<strong>正则表达式（Regular Expression）</strong>。正则表达式是一种描述字符串<strong>模式（Pattern）</strong>的形式化语言。它的表达能力刚好足够描述编程语言的词法结构——既不会太弱（无法描述数字、标识符等结构），也不会太强（不会像上下文无关文法那样需要递归能力）。</p>
+
+        <h3>基本构造</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>语法</th>
+                    <th>含义</th>
+                    <th>示例</th>
+                    <th>匹配</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>a</code></td>
+                    <td>字符a自身</td>
+                    <td><code>cat</code></td>
+                    <td>"cat"</td>
+                </tr>
+                <tr>
+                    <td><code>.</code></td>
+                    <td>任意单个字符（除换行）</td>
+                    <td><code>c.t</code></td>
+                    <td>"cat", "cot", "c.t"</td>
+                </tr>
+                <tr>
+                    <td><code>[abc]</code></td>
+                    <td>字符类：a、b或c中任一</td>
+                    <td><code>[0-9]</code></td>
+                    <td>"0"到"9"的任何数字</td>
+                </tr>
+                <tr>
+                    <td><code>ab*</code></td>
+                    <td>a后跟零个或多个b</td>
+                    <td><code>10*</code></td>
+                    <td>"1", "10", "100", "1000"</td>
+                </tr>
+                <tr>
+                    <td><code>ab+</code></td>
+                    <td>a后跟一个或多个b</td>
+                    <td><code>10+</code></td>
+                    <td>"10", "100", "1000"（不含"1"）</td>
+                </tr>
+                <tr>
+                    <td><code>ab?</code></td>
+                    <td>a后跟零个或一个b</td>
+                    <td><code>10?</code></td>
+                    <td>"1", "10"</td>
+                </tr>
+                <tr>
+                    <td><code>a|b</code></td>
+                    <td>a或b（选择）</td>
+                    <td><code>int|float</code></td>
+                    <td>"int"或"float"</td>
+                </tr>
+                <tr>
+                    <td><code>(...)</code></td>
+                    <td>分组</td>
+                    <td><code>(ab)+</code></td>
+                    <td>"ab", "abab", "ababab"</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>词法规则中的正则表达式</h3>
+
+        <p>实际编译器开发中，我们常用正则表达式来描述各种Token的模式。下面是一些典型例子：</p>
+
+        <pre><code># C语言中常见Token的正则表达式模式
+
+# 标识符（Identifier）：字母或下划线开头，后跟零个或多个字母/数字/下划线
+标识符: [a-zA-Z_][a-zA-Z0-9_]*
+
+# 整数（Integer）：十进制、八进制（0开头）、十六进制（0x开头）
+十进制: [1-9][0-9]*
+八进制: 0[0-7]*
+十六进制: 0[xX][0-9a-fA-F]+
+整数: (十进制)|(八进制)|(十六进制)
+
+# 浮点数（Float）：带小数点的数字
+浮点数: [0-9]+"."[0-9]*
+
+# 字符串字面量：双引号包裹，支持转义
+字符串: "\"" ("\\" . | [^"\\])* "\""
+
+# 注释：// 到行尾
+单行注释: "//" [^\n]*
+
+# 空白字符（跳过）
+空白: [ \t\n\r]+</code></pre>
+
+        <div class="warning">
+            <strong>注意：</strong>正则表达式虽然强大，但有一个重要的局限性——它无法处理<strong>嵌套结构</strong>。比如你不能用一个正则表达式来匹配"括号嵌套"的结构（如 <code>( ( ) )</code>）。这正是为什么词法分析之后还需要语法分析——语法分析使用上下文无关文法，它具备递归能力，可以处理嵌套结构。词法分析和语法分析的"分工边界"就在于——有递归结构的地方属于语法分析，没有递归结构的地方属于词法分析。
+        </div>
+
+        <h2>有限自动机</h2>
+
+        <p>正则表达式是一种描述性的工具——它告诉我们"什么样的字符串是合法的Token"。但编译器是一个程序，它需要一种<strong>算法</strong>来高效地识别这些Token。这种算法就是<strong>有限自动机（Finite Automaton）</strong>。</p>
+
+        <p>有限自动机是一个抽象的计算模型，它有一个<strong>有限的状态集合</strong>，根据输入的字符从一个状态转移到另一个状态。一个Token被识别出来，当且仅当自动机在处理完该Token的所有字符后到达一个<strong>接受状态</strong>。</p>
+
+        <h3>NFA vs DFA</h3>
+
+        <p>有限自动机有两种形式：</p>
+
+        <ul>
+            <li><strong>NFA（非确定性有限自动机）</strong>：在同一个状态下，对于同一个输入字符，可能有多个下一个状态可以选择。而且NFA允许"空转移"（不需要输入字符就可以跳转）。NFA的优点是"直观"——从正则表达式直接转换过来很容易。缺点是模拟NFA需要回溯，最坏情况下时间复杂度是指数级的。</li>
+            <li><strong>DFA（确定性有限自动机）</strong>：在同一个状态下，对于同一个输入字符，最多只有一个下一个状态。DFA没有空转移。DFA的优点是"高效"——模拟DFA只需要O(n)时间（n是输入长度）。缺点是从正则表达式构造DFA比较麻烦。</li>
+        </ul>
+
+        <p>实际编译器中的词法分析器几乎毫无例外地使用DFA——因为效率是关键。但编译器开发者不需要手动设计DFA；他们只需提供正则表达式，然后使用<strong>子集构造法（Subset Construction）</strong>自动将NFA转换为等价的DFA。</p>
+
+        <h3>子集构造法</h3>
+
+        <p>子集构造法（也称为"powerset construction"）的核心思想是：NFA的"状态"是单个状态，但DFA的"状态"是NFA状态的<strong>集合</strong>。NFA在某个时刻"可能处于"哪些状态？这个状态集合就是DFA的一个状态。</p>
+
+        <p>算法的基本步骤：</p>
+
+        <ol>
+            <li>DFA的初始状态 = NFA初始状态的ε-闭包（从初始状态出发，经过零次或多次空转移能到达的所有状态）。</li>
+            <li>对于DFA中每个未处理的状态（它是一个NFA状态集合），对于每个输入字符，计算从这个状态集合出发经过该字符能到达的所有NFA状态的ε-闭包。</li>
+            <li>如果这个新的状态集合还没有被加入DFA，则加入它。</li>
+            <li>重复步骤2-3直到没有新的状态产生。</li>
+        </ol>
+
+        <p>这个过程很抽象，但别担心——你基本不需要手动实现它。工具如Lex和Flex已经帮你做好了。</p>
+
+        <div class="tip">
+            <strong>直观理解：</strong>你可以把NFA想象成一个"有很多备选方案"的猜谜游戏——你同时尝试所有可能的路径，但你需要记录所有可能的位置。而DFA则是一个"确定路线"的导航——每一步你都知道自己在哪里，不需要猜测。词法分析器使用DFA，因为编译器不需要猜测——它需要的是确定性、线性的性能。
+        </div>
+
+        <h2>Lex/Flex简介</h2>
+
+        <p>手工编写词法分析器虽然可行（我们会在下一章实现一个），但在工程实践中，99%的情况下你会使用<strong>词法分析器生成器</strong>。你只需要提供词法规则（正则表达式 + 对应的动作），工具会自动生成一个高效的词法分析器C代码。</p>
+
+        <p>其中最著名的工具是<strong>Lex</strong>（由Mike Lesk和Eric Schmidt在1975年为Unix开发）和它的开源版本<strong>Flex</strong>（Fast Lexical Analyzer，由Vern Paxson在1987年开发）。</p>
+
+        <h3>.l文件格式</h3>
+
+        <p>Flex的输入文件（通常扩展名为.l）分为三个部分，用<code>%%</code>分隔：</p>
+
+        <pre><code>/* 定义段：包含C代码的包含语句、宏定义等 */
+%{
+#include &lt;stdio.h&gt;
+%}
+
+/* 这里可以定义正则表达式的缩写 */
+DIGIT    [0-9]
+LETTER   [a-zA-Z]
+IDENT    {LETTER}({LETTER}|{DIGIT})*
+
+%%
+/* 规则段：模式 + 动作 */
+{IDENT}     { printf("标识符: %s\n", yytext); }
+{DIGIT}+    { printf("整数: %s\n", yytext); }
+"+"         { printf("加号\n"); }
+"-"         { printf("减号\n"); }
+"*"         { printf("乘号\n"); }
+"/"         { printf("除号\n"); }
+"("         { printf("左括号\n"); }
+")"         { printf("右括号\n"); }
+[ \t\n]     { /* 跳过空白 */ }
+.           { printf("未知字符: %s\n", yytext); }
+
+%%
+/* 辅助函数段：C的辅助函数 */
+int main() {
+    yylex();    /* 启动词法分析 */
+    return 0;
+}</code></pre>
+
+        <p>使用Flex处理这个文件很简单：</p>
+
+        <pre><code>flex 词法规则.l    # 生成 lex.yy.c
+gcc lex.yy.c -lfl  # 编译
+./a.out            # 运行</code></pre>
+
+        <p>Flex生成的词法分析器非常高效——它生成的是一个表格驱动的DFA，识别速度与输入长度呈线性关系。而且它内置支持"最长匹配"原则——如果有多个模式都可以匹配当前的输入流，Flex会选择匹配最长的那个。如果长度相同，则选择在.l文件中出现更早的那个规则。</p>
+
+        <div class="highlight">
+            <strong>工程师的智慧：</strong>最长匹配原则非常重要。考虑一个场景——标识符规则 <code>[a-zA-Z_][a-zA-Z0-9_]*</code> 和关键字规则 <code>if</code> 同时匹配输入"if"。如果没有最长匹配，"if"作为关键字可以匹配3个字符，但作为标识符其实可以匹配更长的"ifx"。最长匹配保证了标识符不会被错误地截断。而关键字之所以能被正确识别，是因为词法分析器在处理时通常将关键字规则放在标识符规则之前，先尝试关键字匹配——这也是Flex"优先使用更早出现的规则"的设计意图。
+        </div>
+
+        <h2>一段真实的"踩坑"经历</h2>
+
+        <p>几年前，我在一个团队中负责为某公司的内部DSL开发编译器。词法分析部分用了Flex。有一天，测试人员报告了一个诡异的Bug：在某些情况下，带有下划线的变量名（比如 <code>my_var</code>）会在编译时被错误地识别为两个Token——<code>my</code> 和 <code>var</code>。</p>
+
+        <p>我检查了词法规则文件，发现标识符的正则表达式是这样写的：</p>
+
+        <pre><code>[a-zA-Z]+    { /* 作为标识符处理 */ }
+"_"          { /* 作为下划线处理 */ }</code></pre>
+
+        <p>看到问题了吗？标识符规则 <code>[a-zA-Z]+</code> 不包含下划线！所以 <code>my_var</code> 被拆成了 <code>my</code>（匹配标识符）、<code>_</code>（匹配下划线）、<code>var</code>（匹配标识符）。修复很简单：</p>
+
+        <pre><code>[a-zA-Z_][a-zA-Z0-9_]*    { /* 作为标识符处理 */ }</code></pre>
+
+        <p>这个Bug的教训是：<strong>词法规则的边界定义要精确</strong>。很多编程语言允许标识符中包含下划线，但你和一个C语言的关键字不同——标识符的规则必须完整涵盖所有合法字符。看似微小的遗漏，就会导致编译器把合法的程序当作错误的语法来解析。</p>
+
+        <div class="warning">
+            <strong>值得警惕的是：</strong>这个Bug之所以"诡异"，是因为它只在特定的变量名上出现，且错误信息让人摸不着头脑——后面的语法分析器报告"语法错误"，而不是词法分析器报错。Bug的"表现地点"往往不是"根源地点"，这是编译器调试最困扰人的特点之一。理解每个阶段做了什么、没做什么，是有效调试编译器的前提。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>在这一章中，我们学习了词法分析在编译器中的角色——将字符串转换为Token流，了解了它的理论工具：正则表达式（描述模式）和有限自动机（识别模式）。我们区分了NFA和DFA的概念，知道了DFA是实际词法分析器的选择，而子集构造法能将NFA转换为DFA。最后，我们简介了Flex这个词法分析器生成工具，看到了它如何让你用简单的规则文件生成高效的词法分析器。</p>
+
+        <p>下一章，我们将撸起袖子写代码——用Flex开发一个真正的词法分析器，同时也手写一个简单的词法分析器来理解底层原理。我们将讨论Token的数据结构设计，以及如何处理各种词法错误。</p>
+
+        <div class="footer-nav">
+            <a href="02.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="04.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

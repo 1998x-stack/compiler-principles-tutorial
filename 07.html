@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第7章 自底向上语法分析</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html" class="active">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第7章 自底向上语法分析</h2>
+
+        <p>大家好，我是你们的讲师。上一章我们学习了自顶向下的语法分析方法——递归下降解析器和LL(1)预测分析。它们思想直观、实现简单，但有一个根本性的局限：文法必须是非左递归的，而且必须满足LL(1)条件（即一个前瞻Token足以决定选择哪个产生式）。</p>
+
+        <p>自底向上（Bottom-Up）分析采取了完全不同的思路：它不是从开始符号往下"推导"，而是从输入的Token序列往上"归约"——将Token逐步合并为越来越大的语法结构，直到归约为开始符号。这种方法的能力更强，能处理更多种类的文法（包括左递归文法），但构造过程也更加复杂。</p>
+
+        <p>如果说自顶向下分析是"从目标出发规划路径"，那么自底向上分析就是"从起点出发拼接路径"。两者的终点一样，但思维方向完全相反。</p>
+
+        <div class="highlight">
+            <strong>实用价值：</strong>Yacc和Bison——广泛使用的语法分析器生成器——就是基于自底向上分析技术的。GCC多年来的解析器核心也是Yacc/Bison生成的。你可能会在职业生涯中无数次使用Bison来生成解析器，但你可能从未需要手写一个LR分析器。然而，理解LR分析的工作原理会让你在调试Bison文法时游刃有余。
+        </div>
+
+        <h2>移进-归约分析</h2>
+
+        <p>自底向上分析的核心操作是<strong>移进-归约（Shift-Reduce Parsing）</strong>。它维护一个<strong>栈</strong>和四个基本动作：</p>
+
+        <ul>
+            <li><strong>移进（Shift）</strong>：将下一个输入Token压入栈顶。</li>
+            <li><strong>归约（Reduce）</strong>：栈顶的一串符号匹配某条产生式的右部，将它们弹出并用产生式的左部（非终结符）替换。比如栈顶是 <code>term + term</code>，而文法有 <code>expr → term + term</code>，则可以用 <code>expr</code> 替换栈顶的这三个符号。</li>
+            <li><strong>接受（Accept）</strong>：栈中只剩开始符号，且输入已全部读取——解析成功。</li>
+            <li><strong>报错（Error）</strong>：无法移进也无法归约——语法错误。</li>
+        </ul>
+
+        <p>让我们用一个具体的例子来展示移进-归约分析的全过程。文法仍然是我们熟悉的算术表达式：</p>
+
+        <pre><code>文法：
+expr → expr "+" term | term
+term → term "*" factor | factor
+factor → NUM | "(" expr ")"
+
+输入：1 + 2 * 3</code></pre>
+
+        <pre><code>移进-归约过程：
+
+步骤 | 栈内容               | 输入剩余           | 动作
+-----|----------------------|--------------------|-------
+1    | $                    | 1 + 2 * 3 $        | 移进
+2    | $ 1                  | + 2 * 3 $          | 归约 factor → NUM
+3    | $ factor             | + 2 * 3 $          | 归约 term → factor
+4    | $ term               | + 2 * 3 $          | 归约 expr → term
+5    | $ expr               | + 2 * 3 $          | 移进
+6    | $ expr +             | 2 * 3 $            | 移进
+7    | $ expr + 2           | * 3 $              | 归约 factor → NUM
+8    | $ expr + factor      | * 3 $              | 归约 term → factor
+9    | $ expr + term        | * 3 $              | 移进
+10   | $ expr + term *      | 3 $                | 移进
+11   | $ expr + term * 3    | $                  | 归约 factor → NUM
+12   | $ expr + term * factor| $                  | 归约 term → term * factor
+13   | $ expr + term         | $                  | 归约 expr → expr + term
+14   | $ expr               | $                  | 接受！</code></pre>
+
+        <p>注意步骤5到步骤6：我们选择了"移进"而不是"归约"——尽管此时栈顶的 <code>expr</code> 就是开始符号。如果我们选择"归约"，就会在输入还剩 <code>+ 2 * 3</code> 时就试图接受，这显然是错误的。所以，"什么时候移进、什么时候归约"是LR分析的核心决策问题。</p>
+
+        <div class="tip">
+            <strong>直观理解：</strong>移进-归约分析就像在玩"俄罗斯方块"——你把Token一块块"移进"到栈上，当栈顶的符号序列"拼成一个模式"（匹配某条产生式右部）时，你就"归约"它。归约后释放的栈空间可以继续容纳新的Token。最终，所有Token都进入栈并被归约为一个开始符号，游戏胜利。
+        </div>
+
+        <h2>LR(0)与SLR</h2>
+
+        <p>LR(L)中的"L"表示从左到右扫描输入，"R"表示最右推导的逆（最左归约），而数字则代表"前瞻Token的个数"。LR(0)就是<strong>不看前瞻Token</strong>就做出决策；SLR（Simple LR）则在LR(0)的基础上增加了前瞻Token的检查。</p>
+
+        <h3>LR(0)项目</h3>
+
+        <p>LR(0)分析的核心概念是<strong>项目（Item）</strong>。一个项目是"带有一个点的产生式"，点表示"已经匹配到什么位置"。比如对于产生式 <code>expr → expr + term</code>：</p>
+
+        <ul>
+            <li><code>expr → · expr + term</code>——还没开始匹配</li>
+            <li><code>expr → expr · + term</code>——已经匹配了expr，期望看到+</li>
+            <li><code>expr → expr + · term</code>——已经看到+，期望解析term</li>
+            <li><code>expr → expr + term ·</code>——完全匹配，可以归约了</li>
+        </ul>
+
+        <h3>项目集规范族</h3>
+
+        <p>LR分析器将所有可能的"分析状态"组织为一系列<strong>项目集（Item Set）</strong>，称为<strong>项目集规范族（Canonical Collection of LR(0) Items）</strong>。每个项目集对应DFA的一个状态。</p>
+
+        <p>构造算法：</p>
+        <ol>
+            <li>初始状态 = CLOSURE({ S' → ·S })，其中S'是增广开始符号（新添加的顶层产生式）。</li>
+            <li>对于每个状态（项目集）和每个文法符号X（终结符或非终结符），计算GO(state, X) = CLOSURE(所有点后紧跟着X的项目，将点移到X之后)。</li>
+            <li>重复直到没有新状态产生。</li>
+        </ol>
+
+        <p>CLOSURE函数的定义：</p>
+        <ul>
+            <li>给定项目集中的所有项目首先都在CLOSURE中。</li>
+            <li>如果 <code>A → α · Bβ</code> 在CLOSURE中，则所有 <code>B → · γ</code> 形式的项目也在CLOSURE中。</li>
+            <li>重复直到不再增加。</li>
+        </ul>
+
+        <h3>从LR(0)构造SLR分析表</h3>
+
+        <p>SLR分析表的构造步骤如下：</p>
+
+        <pre><code>1. 构造LR(0)项目集规范族 C = {I0, I1, ..., In}
+
+2. 对于每个状态Ii中的每个项目：
+   a. 如果项目是 A → α · aβ（a是终结符），且GO(Ii, a) = Ij
+      则设置 ACTION[i, a] = "移进到j"
+   b. 如果项目是 A → α · （归约项目）且 A ≠ S'
+      则对于FOLLOW(A)中的每个终结符a（包括$）
+      设置 ACTION[i, a] = "归约 A → α"
+   c. 如果项目是 S' → S · （接受项目）
+      则设置 ACTION[i, $] = "接受"
+
+3. 对于每个非终结符A，如果GO(Ii, A) = Ij
+   则设置 GOTO[i, A] = j
+
+4. 所有空白单元格 = 错误</code></pre>
+
+        <div class="highlight">
+            <strong>SLR vs LR(0)的关键区别：</strong>LR(0)在遇到归约项目时直接归约，不看任何前瞻。而SLR只在当前输入Token属于FOLLOW(A)时才归约——这意味着SLR减少了"归约-移进冲突"。举个具体例子：如果某状态中既有"移进"项目也有"归约"项目，LR(0)会报告冲突而SLR可能不会——因为归约只在特定Token下触发，可能与移进Token不重叠。SLR是LR(0)到完整LR(1)之间的一个实用的"折中"方案。
+        </div>
+
+        <h2>LALR(1)与Bison实战</h2>
+
+        <p>完整的LR(1)分析表虽然能力最强，但状态数量可能非常庞大（对于常见的编程语言，可能有数千个状态）。<strong>LALR(1)（Look-Ahead LR）</strong>在LR(1)的基础上做了关键优化——合并那些"核心项目相同、只有前瞻Token不同"的状态。这样可以将状态数量减少到一个可控的范围（C语言约300-400个状态），同时保留了LR(1)的大部分能力。</p>
+
+        <p>LALR(1)是目前<strong>最广泛使用</strong>的自底向上分析方法。Yacc和Bison默认生成的就是LALR(1)分析器。</p>
+
+        <h3>Bison语法文件</h3>
+
+        <p>Bison的输入文件格式与Flex类似——三段式结构，但规则段的写法不同：</p>
+
+        <pre><code>/* calc.y — Bison计算器语法文件 */
+
+%{
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+/* 声明yylex和yyerror */
+extern int yylex();
+void yyerror(const char *s);
+%}
+
+/* 声明Token */
+%token NUM
+%token PLUS MINUS MUL DIV LPAREN RPAREN
+%token NEWLINE
+
+/* 运算符优先级和结合性声明 —— 解决二义性的利器！ */
+%left PLUS MINUS        /* 左结合，优先级低 */
+%left MUL DIV           /* 左结合，优先级中 */
+%right UMINUS           /* 右结合，优先级高 */
+
+%%
+/* 规则段 */
+
+/* 顶层：一系列表达式或换行 */
+input: /* 空 */
+     | input line
+;
+
+line: NEWLINE
+    | expr NEWLINE  { printf("结果 = %d\n", $1); }
+;
+
+expr: NUM                { $$ = $1; }
+    | expr PLUS expr     { $$ = $1 + $3; }
+    | expr MINUS expr    { $$ = $1 - $3; }
+    | expr MUL expr      { $$ = $1 * $3; }
+    | expr DIV expr      { $$ = $1 / $3; }
+    | LPAREN expr RPAREN { $$ = $2; }
+    | MINUS expr %prec UMINUS { $$ = -$2; }  /* 负号（不同于减号） */
+;
+
+%%
+/* 辅助函数段 */
+
+int main() {
+    return yyparse();  /* 启动解析 */
+}
+
+void yyerror(const char *s) {
+    fprintf(stderr, "解析错误: %s\n", s);
+}
+
+int yylex() {
+    /* 这里可以调用Flex生成的词法分析器 */
+    /* 也可以手写一个简单的词法分析器 */
+    int c = getchar();
+    /* ... */
+}</code></pre>
+
+        <p>编译和使用：</p>
+
+        <pre><code>bison -d calc.y          # 生成 calc.tab.c 和 calc.tab.h
+flex calc.l              # 如果有Flex词法文件
+gcc calc.tab.c lex.yy.c -o calc
+./calc                   # 运行交互式计算器
+&gt; 3 + 5 * 2
+结果 = 13
+&gt; (3 + 5) * 2
+结果 = 16
+&gt; -3 + 4
+结果 = 1</code></pre>
+
+        <h2>二义性文法的处理</h2>
+
+        <p>上一章我们提到了二义性文法及其消除方法。在Bison/Yacc中，最常用的方法是使用<strong>优先级和结合性声明</strong>——这正是Bison的设计精妙之处。</p>
+
+        <h3>优先级声明</h3>
+
+        <p>在Bison中，<code>%left</code>、<code>%right</code>、<code>%nonassoc</code> 声明解决了大量可能的二义性问题：</p>
+
+        <pre><code>%left PLUS MINUS      // + 和 - 左结合，优先级1
+%left MUL DIV         // * 和 / 左结合，优先级2
+%right POWER          // ^ 右结合，优先级3
+%nonassoc RELOP       // 关系运算符不结合，优先级4</code></pre>
+
+        <ul>
+            <li><strong>%left</strong>：左结合。如果遇到 <code>1 + 2 + 3</code>，产生式 <code>expr + expr</code> 会优先归约左边的 <code>1 + 2</code>（即 <code>(1 + 2) + 3</code>）。</li>
+            <li><strong>%right</strong>：右结合。如果遇到 <code>a = b = c</code>，会优先归约右边的 <code>b = c</code>（即 <code>a = (b = c)</code>）。</li>
+            <li><strong>%nonassoc</strong>：不结合。如果遇到 <code>a &lt; b &lt; c</code>，直接报语法错误，因为关系运算符不应该连续使用。</li>
+        </ul>
+
+        <p>声明出现在文件中的顺序决定了优先级——越靠后的声明优先级越高。因此 <code>MUL</code> 和 <code>DIV</code> 的优先级高于 <code>PLUS</code> 和 <code>MINUS</code>。</p>
+
+        <div class="warning">
+            <strong>一个容易忽视的问题：</strong>优先级声明虽然强大，但它只在"二义性冲突"时才起作用——也就是说，仅在LR分析器既可以选择移进也可以选择归约（移进-归约冲突），或者可以选择两种不同的归约（归约-归约冲突）时，优先级声明才用来打破平局。如果你的文法本身是明确无二义的，优先级声明不会产生任何影响。这导致一个陷阱：有些人把所有运算符都用 <code>%left</code> 声明，以为这样就能自动处理好优先级——如果你在产生式中没有使用"层级结构"，那优先级声明实际上只解决了冲突，而没有表达正确的优先级约束。
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>LR变体</th>
+                    <th>前瞻Token</th>
+                    <th>状态数量</th>
+                    <th>能力</th>
+                    <th>典型工具</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>LR(0)</td>
+                    <td>0个</td>
+                    <td>少</td>
+                    <td>弱</td>
+                    <td>学术演示</td>
+                </tr>
+                <tr>
+                    <td>SLR(1)</td>
+                    <td>1个（通过FOLLOW集）</td>
+                    <td>少</td>
+                    <td>中等</td>
+                    <td>简单编译器</td>
+                </tr>
+                <tr>
+                    <td>LALR(1)</td>
+                    <td>1个（合并LR(1)状态）</td>
+                    <td>中等</td>
+                    <td>强</td>
+                    <td>Yacc/Bison</td>
+                </tr>
+                <tr>
+                    <td>LR(1)</td>
+                    <td>1个（完整）</td>
+                    <td>很多</td>
+                    <td>最强</td>
+                    <td>理论上限</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>一段真实的"踩坑"经历</h2>
+
+        <p>多年以前，我在用Bison为一个领域特定语言写解析器时，遇到了一个让我折腾了整整两天的"归约-归约冲突（Reduce-Reduce Conflict）"。</p>
+
+        <p>我们的语言有两种非常相似的语法结构：数组访问 <code>a[i]</code> 和函数调用 <code>f(x)</code>。我天真地写了这样的文法：</p>
+
+        <pre><code>primary: IDENTIFIER
+       | IDENTIFIER "[" expr "]"   /* 数组访问 */
+       | IDENTIFIER "(" args ")"   /* 函数调用 */
+;</code></pre>
+
+        <p>Bison编译时报了"归约-归约冲突"的警告。问题出在哪里？在LR分析中，当分析器看到 <code>IDENTIFIER</code> 时，它需要决定是将它归约为 <code>primary</code> 还是保留给后面的 <code>[</code> 或 <code>(</code> 使用。这实际上不是一个语法问题，而是一个<strong>词法/语义上下文问题</strong>。</p>
+
+        <p>解决方案是用"间接层级"来分离：</p>
+
+        <pre><code>primary: atom
+       | array_access
+       | func_call
+;
+atom: IDENTIFIER | NUM | ...
+;
+array_access: atom "[" expr "]"
+;
+func_call: atom "(" args ")"
+;</code></pre>
+
+        <p>这样，分析器看到 <code>IDENTIFIER</code> 时先归约为 <code>atom</code>，然后根据后面的Token决定是继续归约到 <code>primary</code> 还是展开为 <code>array_access</code>。归约-归约冲突消失了。</p>
+
+        <div class="highlight">
+            <strong>归约-归约冲突的诊断技巧：</strong>Bison在检测到冲突时，可以加上 <code>-v</code> 选项生成 <code>.output</code> 文件，其中详细列出了所有状态和冲突。找到有冲突的状态，检查它的项目集，你就知道是哪些产生式在打架。如果你看到两个不同的产生式都试图在同一个栈顶状态下归约——那就是归约-归约冲突。解决方案通常是用层级结构来延迟归约决策。这个 <code>-v</code> 选项是我在Bison调试中最重要的工具，没有之一。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>这一章我们深入学习了自底向上的语法分析——LR系列方法。我们从<strong>移进-归约分析</strong>的基本过程出发，通过一个具体示例展示了栈的变化和四个基本动作（移进、归约、接受、报错）。然后我们介绍了<strong>LR(0)项目</strong>和<strong>项目集规范族</strong>的构造方法，以及如何从它们构造<strong>SLR分析表</strong>——这是理解后续更强大LR变体的基础。接着我们介绍了<strong>LALR(1)</strong>——它通过合并LR(1)中"核心相同"的状态来取得能力与效率的平衡，是Yacc/Bison默认使用的方法。最后，我们讨论了如何在Bison中使用<strong>优先级和结合性声明</strong>来解决二义性问题，并分享了一个归约-归约冲突的真实调试经历。</p>
+
+        <p>学完自顶向下和自底向上两种分析方法，你已经掌握了语法分析的全部核心理论。下一章，我们将进入另一个实战性极强的工具——<strong>ANTLR4</strong>。ANTLR4是"自适应LL(*)"（ALL(*)）分析器的代表，它结合了LL的直观性和LR的强大能力，是目前最流行的语法分析器生成器之一。我们将在ANTLR4的帮助下，从一个完整的文法文件出发，生成词法分析器、语法分析器甚至AST访问器——让你感受到"现代解析器生成器"的强大。</p>
+
+        <div class="footer-nav">
+            <a href="06.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="08.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

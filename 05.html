@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第5章 语法分析基础</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html" class="active">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第5章 语法分析基础</h2>
+
+        <p>大家好，我是你们的讲师。到目前为止，我们的编译器只能做一件事——把源代码拆成Token。但光有单词是不够的，我们需要知道这些单词之间的<strong>结构关系</strong>。就像中文句子"我吃饭"——词法分析只是告诉你"我"是代词、"吃"是动词、"饭"是名词，但语法分析会告诉你这是一个"主谓宾"结构，而且语义上是合理的。</p>
+
+        <p>语法分析（Syntax Analysis / Parsing）是编译器中<strong>最核心、最复杂、也是理论最深厚</strong>的一个阶段。可以说，整个编译原理课程中一半的重量都在这里。从这一章开始，我们将深入探讨编译器的心脏。</p>
+
+        <div class="highlight">
+            <strong>为什么语法分析如此重要？</strong>因为它是编译器中第一个检查"程序是否合法"的阶段。词法分析只关心"字符是否属于语言的字母表"，而语法分析关心的是"这些Token的组合是否遵循语言的文法规则"。一个语法错误（比如少了个括号）会让整个程序变得毫无意义。而且，语法分析的结构化输出——语法树——是编译器后续所有阶段（语义分析、优化、代码生成）的基础。
+        </div>
+
+        <h2>上下文无关文法定义</h2>
+
+        <p>我们用什么来精确描述一门编程语言的语法结构？答案就是<strong>上下文无关文法（Context-Free Grammar, CFG）</strong>——这里"上下文无关"的意思是：一个语法结构的含义不依赖于它出现的上下文环境。</p>
+
+        <p>一个CFG由四个部分组成：</p>
+
+        <ul>
+            <li><strong>终结符（Terminal）</strong>：词法分析产出的Token——就是那些不能再被拆分的"单词"。比如 <code>int</code>、<code>+</code>、<code>42</code>、<code>;</code>。</li>
+            <li><strong>非终结符（Nonterminal）</strong>：需要进一步展开的语法成分。比如 <code>expression</code>（表达式）、<code>statement</code>（语句）、<code>declaration</code>（声明）。</li>
+            <li><strong>产生式（Production）</strong>：描述非终结符如何展开为终结符和非终结符的规则。形如 <code>A → α</code>，其中A是非终结符，α是零个或多个终结符/非终结符的序列。</li>
+            <li><strong>开始符号（Start Symbol）</strong>：一个特殊的非终结符，表示整个语言的"根"。所有文法规则都从它开始推导。</li>
+        </ul>
+
+        <p>让我们用一个非常简单的算术表达式文法来理解这些概念：</p>
+
+        <pre><code>// 一个简单的算术表达式文法
+
+// 产生式（Production）：
+// 符号说明：→ 读作"定义为"，| 读作"或者"
+
+expr    → expr "+" term
+        | expr "-" term
+        | term
+
+term    → term "*" factor
+        | term "/" factor
+        | factor
+
+factor  → "(" expr ")"
+        | NUM
+
+// 其中：
+//   非终结符: expr, term, factor
+//   终结符: "+", "-", "*", "/", "(", ")", NUM
+//   开始符号: expr</code></pre>
+
+        <p>这个文法描述了带优先级（乘除优先于加减）的算术表达式。注意看，<code>expr</code> 的定义中引用了自身——这就是文法的<strong>递归</strong>能力，也是CFG比正则表达式更强大的根本原因。</p>
+
+        <h2>最左推导与最右推导</h2>
+
+        <p>"推导（Derivation）"这个概念，简单说就是"从开始符号出发，反复使用产生式，直到得到一个完全由终结符组成的序列"的过程。如果推导成功，说明输入的Token序列在语法上是合法的。</p>
+
+        <p>考虑表达式 <code>1 + 2 * 3</code>，下面分别用最左推导和最右推导来生成它：</p>
+
+        <h3>最左推导（Leftmost Derivation）</h3>
+
+        <p>每一步都替换<strong>最左边</strong>的非终结符：</p>
+
+        <pre><code>expr
+→ expr + term           // 替换最左边的 expr
+→ term + term           // 替换最左边的 term（expr已被替换）
+→ factor + term         // 替换最左边的 factor
+→ NUM + term            // 替换最左边的 factor
+→ "1" + term            // 拿到具体的数值
+→ "1" + term * factor   // 替换最左边的 term（只剩下一个term）
+→ "1" + factor * factor
+→ "1" + NUM * factor
+→ "1" + "2" * factor
+→ "1" + "2" * NUM
+→ "1" + "2" * "3"</code></pre>
+
+        <h3>最右推导（Rightmost Derivation）</h3>
+
+        <p>每一步都替换<strong>最右边</strong>的非终结符：</p>
+
+        <pre><code>expr
+→ expr + term               // 替换最右边（但只有一个非终结符）
+→ expr + term * factor       // 替换最右边的 term
+→ expr + term * NUM          // 替换最右边的 factor
+→ expr + term * "3"
+→ expr + factor * "3"
+→ expr + NUM * "3"
+→ expr + "2" * "3"
+→ term + "2" * "3"
+→ factor + "2" * "3"
+→ NUM + "2" * "3"
+→ "1" + "2" * "3"</code></pre>
+
+        <div class="tip">
+            <strong>为什么最右推导更重要？</strong>因为<strong>自底向上的语法分析器（如LR分析器）执行的是最右推导的逆过程——最左归约</strong>。所以当你学习第7章的自底向上分析时，你会反复遇到"最右推导"这个概念。相反，自顶向下的分析器（如LL分析器）执行的则是最左推导。这两个"最"字不是形式上的区别——它们决定了分析器的构造方法和能力范围。
+        </div>
+
+        <p><strong>规范推导（Canonical Derivation）</strong>指的就是最右推导——之所以叫"规范"，是因为在编译器理论和实践中，最右推导被证明具有最好的性质，尤其是在LR分析中。</p>
+
+        <h2>语法树与AST的区别</h2>
+
+        <p>许多初学者容易混淆<strong>具体语法树（CST, Concrete Syntax Tree，也称Parse Tree）</strong>和<strong>抽象语法树（AST, Abstract Syntax Tree）</strong>。它们的区别非常关键。</p>
+
+        <h3>具体语法树（CST）</h3>
+
+        <p>CST是推导过程的"树形记录"——每个终结符和非终结符都是树中的一个节点。它完整保留了文法中的所有信息，包括那些仅用于"语法结构"的辅助节点（比如我们文法中的 term、factor 等中间非终结符）。CST非常"啰嗦"——对于表达式 <code>1 + 2</code>，CST已经包含了相当多的节点。</p>
+
+        <h3>抽象语法树（AST）</h3>
+
+        <p>AST只保留程序语义需要的核心信息。它去掉了CST中不需要的中间节点（比如 term、factor），直接表达"操作符-操作数"关系。对于 <code>1 + 2</code>，AST就是一个根节点"+"和两个叶子节点"1"、"2"。</p>
+
+        <p>来看一个具体的对比——对于表达式 <code>1 + 2 * 3</code>：</p>
+
+        <pre><code>// 具体语法树（CST）——保留了所有文法节点
+         expr
+        / |  \
+     expr +  term
+      |      / | \
+     term term * factor
+      |    |      \
+    factor factor  NUM(3)
+      |      |
+    NUM(1) NUM(2)
+
+// 抽象语法树（AST）——只保留语义核心
+       +
+      / \
+     1   *
+        / \
+       2   3
+</code></pre>
+
+        <p>CST直接反映了文法结构（term、factor等中间节点都保留），而AST去除了这些"语法糖"，直接表达了运算的优先级和结合关系。在AST中，<code>2 * 3</code> 是 <code>+</code> 的右子节点——这明确表明了乘法先于加法执行。</p>
+
+        <div class="highlight">
+            <strong>工程实践：</strong>大多数编译器不会显式构建CST。CST太大了——一个100行的C程序，CST可能有上万个节点。相反，语法分析器通常会"边解析边构建AST"：在语法分析的过程中，直接在动作代码中创建AST节点，跳过那些可以省略的中间节点。这就是为什么ANTLR等工具允许你在每条产生式后面附加"动作代码"——你在那里构建AST。如果你不构建AST，语法分析器只是告诉你"合法"或"不合法"，但编译器需要结构化的输出来进行后续阶段。
+        </div>
+
+        <h2>二义性文法</h2>
+
+        <p>"二义性（Ambiguity）"是文法设计的一个严重问题。如果一个文法对同一个输入序列可以产生<strong>两种或以上不同的语法树</strong>，那么这个文法就是<strong>二义的（Ambiguous）</strong>。</p>
+
+        <h3>悬空else问题</h3>
+
+        <p>最经典的二义性例子是"悬空else（Dangling Else）"问题。考虑下面的文法片段：</p>
+
+        <pre><code>stmt → if expr then stmt
+     | if expr then stmt else stmt
+     | other</code></pre>
+
+        <p>现在分析输入 <code>if E1 then if E2 then S1 else S2</code>：</p>
+
+        <p>它有两种可能的解析方式：</p>
+
+        <pre><code>// 解析方式1：else匹配最近的if
+if E1 then (if E2 then S1 else S2)
+
+// 解析方式2：else匹配最远的if
+if E1 then (if E2 then S1) else S2</code></pre>
+
+        <p>这两种解析方式产生的语法树完全不同，程序的行为也因此不同。几乎所有的主流语言（C、C++、Java、JavaScript）都采用了"最近匹配"规则（else匹配离它最近的if），但语言的文法本身如果不加处理，是无法消除这种歧义的。</p>
+
+        <h3>消除二义性的方法</h3>
+
+        <p>有三种主流策略：</p>
+
+        <ol>
+            <li><strong>改写文法</strong>：将文法改写为无二义的形式。比如引入<code>matched_stmt</code>（有else的语句）和<code>unmatched_stmt</code>（没有else的语句）两种非终结符。这会在文法层面彻底消除歧义，但会使文法变得更加复杂。</li>
+            <li><strong>优先级和结合性声明</strong>：在Yacc/Bison等工具中，使用 <code>%left</code>、<code>%right</code>、<code>%nonassoc</code> 等声明来告诉分析器如何处理有歧义的情况。这种做法不需要改文法，是工程中最常用的方法。</li>
+            <li><strong>分析器策略</strong>：某些分析器（如LL分析器）默认采用贪心匹配——如果可以匹配更长的产生式，就优先匹配。这个方法简单但不够通用。</li>
+        </ol>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>方法</th>
+                    <th>优点</th>
+                    <th>缺点</th>
+                    <th>适用场景</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>改写文法</td>
+                    <td>理论上无懈可击</td>
+                    <td>文法变得庞大且难以维护</td>
+                    <td>学术研究、小语言</td>
+                </tr>
+                <tr>
+                    <td>优先级声明</td>
+                    <td>简洁、易于理解</td>
+                    <td>依赖特定工具的特性</td>
+                    <td>Yacc/Bison/ANTLR工程实践</td>
+                </tr>
+                <tr>
+                    <td>分析器策略</td>
+                    <td>无需修改文法</td>
+                    <td>可能导致意外的行为</td>
+                    <td>手写递归下降解析器</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>一段真实的"踩坑"经历</h2>
+
+        <p>说到二义性，我有个印象特别深刻的教训。很多年前，我在为一个团队开发的DSL设计语法时，写了一段这样的规则：</p>
+
+        <pre><code>// 错误的文法设计！
+expr → expr "-" expr     // 减法
+     | expr ">" expr     // 大于比较
+     | NUM</code></pre>
+
+        <p>当时我天真地以为"语法分析器会正确处理所有情况"，结果测试 <code>5 - 3 > 1</code> 时，分析器给出了令人困惑的结果。有的输入按 <code>(5 - 3) > 1</code> 解析（结果是true），有的按 <code>5 - (3 > 1)</code> 解析（结果是4）。</p>
+
+        <p>为什么？因为这个文法是<strong>二义的</strong>！减法 <code>-</code> 和比较 <code>></code> 之间的优先级没有被文法的层级结构表达出来。在正确的文法中，算术表达式和比较表达式应该在不同的优先级层级上：</p>
+
+        <pre><code>// 正确的文法设计——用层级表达优先级
+expr     → comparison
+comparison → comparison ">" arith_expr
+          | arith_expr
+arith_expr → arith_expr "-" term
+          | term
+term     → factor
+factor   → NUM | "(" expr ")"</code></pre>
+
+        <p>这个层级表达的意思很明确：减法比比较的优先级高。而且这个文法是<strong>无二义的</strong>——对于任何输入，只有一棵合法的语法树。</p>
+
+        <div class="warning">
+            <strong>关键教训：</strong>文法中"优先级"不是一个开关，而是通过<strong>层级（Level）</strong>来编码的。每一层对应一个优先级层级，高一层的非终结符产生式可以嵌套低一层的非终结符，反之不行。这种层级结构是消除算术和比较表达式二义性的标准方式。我在那之后养成了一个习惯：写文法时先用纸画出优先级层级图，再写产生式。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们全面学习了语法分析的理论基础。我们从<strong>上下文无关文法（CFG）</strong>的定义出发，掌握了终结符、非终结符、产生式、开始符号这四个核心概念。接着讨论了<strong>最左推导</strong>与<strong>最右推导</strong>的区别——前者对应自顶向下分析，后者对应自底向上分析。然后我们区分了<strong>CST（具体语法树）</strong>和<strong>AST（抽象语法树）</strong>——编译器构建的是AST而不是CST，因为AST更简洁、更接近语义。最后我们分析了<strong>文法的二义性</strong>问题，特别是著名的"悬空else"问题，以及通过改写文法、优先级声明、分析器策略三种消除方法。</p>
+
+        <p>下一章，我们将正式进入<strong>自顶向下语法分析</strong>的实际构造方法。我们会学习递归下降解析器——这是最直观、最容易手写的解析方法。我们还会讨论FIRST集、FOLLOW集、LL(1)预测分析表以及左递归消除等关键技术。你将体会到"给每个非终结符写一个函数"这种优雅的设计思想。</p>
+
+        <div class="footer-nav">
+            <a href="04.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="06.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

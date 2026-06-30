@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第4章 词法分析器实现</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html" class="active">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第4章 词法分析器实现</h2>
+
+        <p>大家好，我是你们的讲师。上一章我们学习了词法分析的理论基础——正则表达式和有限自动机。但理论终归要落地。今天，我们就来<strong>亲手实现一个词法分析器</strong>。</p>
+
+        <p>我们会从两个方向入手：第一，用<strong>Flex</strong>这个现成的词法分析器生成器，快速构建一个功能完整的词法分析器；第二，<strong>手写一个简单的词法分析器</strong>，理解它的底层工作机制。这种"两条腿走路"的方式会让你既具备工程效率，又掌握底层原理——在实际工作中，你可能大部分时间用Flex/ANTLR，但遇到诡异的Bug时，手写词法分析器的经验会让你知道问题出在哪里。</p>
+
+        <div class="highlight">
+            <strong>本章目标：</strong>完成一个支持C语言子集的词法分析器，包括关键字、标识符、数字字面量、字符串字面量、运算符和分隔符。同时学会设计Token数据结构、处理常见的词法错误。
+        </div>
+
+        <h2>Flex语法详解</h2>
+
+        <p>让我们深入Flex的语法。一个完整的Flex文件包含三个部分：</p>
+
+        <pre><code>%{
+/* ======= 第一部分：定义段 ======= */
+/* 这里的C代码会被直接复制到生成的 lex.yy.c 的开头 */
+#include "tokens.h"
+#include &lt;stdio.h&gt;
+
+/* 可以定义全局变量和辅助函数 */
+int line_num = 1;
+%}
+
+/* 正则表达式的别名定义（缩写） */
+DIGIT    [0-9]
+LETTER   [a-zA-Z_]
+IDENT    {LETTER}({LETTER}|{DIGIT})*
+
+/* 启动条件（Start Conditions）：用于处理上下文相关的词法规则 */
+%x STRING
+
+%%
+/* ======= 第二部分：规则段 ======= */
+/* 格式：模式    { 动作 } */
+
+/* 关键字（优先匹配） */
+"int"       { return TOKEN_INT; }
+"float"     { return TOKEN_FLOAT; }
+"if"        { return TOKEN_IF; }
+"else"      { return TOKEN_ELSE; }
+"while"     { return TOKEN_WHILE; }
+"return"    { return TOKEN_RETURN; }
+
+/* 标识符 */
+{IDENT}     { yylval.str = strdup(yytext); return TOKEN_IDENT; }
+
+/* 数字字面量 */
+{DIGIT}+                { yylval.ival = atoi(yytext); return TOKEN_INT_LIT; }
+{DIGIT}+"."{DIGIT}*     { yylval.fval = atof(yytext); return TOKEN_FLOAT_LIT; }
+
+/* 字符串字面量（使用启动条件处理） */
+"\""        { BEGIN(STRING); string_buf[0] = '\0'; }
+&lt;STRING&gt;"\""        { BEGIN(INITIAL); yylval.str = strdup(string_buf); return TOKEN_STRING; }
+&lt;STRING&gt;.           { /* 追加字符到字符串缓冲区 */ }
+&lt;STRING&gt;\n          { fprintf(stderr, "第%d行: 未闭合的字符串\n", line_num); }
+
+/* 运算符和分隔符 */
+"+"         { return TOKEN_PLUS; }
+"-"         { return TOKEN_MINUS; }
+"*"         { return TOKEN_MUL; }
+"/"         { return TOKEN_DIV; }
+"=="        { return TOKEN_EQ; }
+"!="        { return TOKEN_NE; }
+"&lt;"         { return TOKEN_LT; }
+"&lt;="        { return TOKEN_LE; }
+";"         { return TOKEN_SEMI; }
+"("         { return TOKEN_LPAREN; }
+")"         { return TOKEN_RPAREN; }
+"{"         { return TOKEN_LBRACE; }
+"}"         { return TOKEN_RBRACE; }
+
+/* 跳过空白和注释 */
+[ \t\r]+    { /* 忽略空白 */ }
+\n          { line_num++; }
+"//"[^\n]*  { /* 忽略单行注释 */ }
+"/*"        { /* 多行注释开始，需要使用启动条件 */ }
+
+/* 非法字符 */
+.           { fprintf(stderr, "第%d行: 非法字符 '%s'\n", line_num, yytext); }
+
+%%
+/* ======= 第三部分：辅助函数段 ======= */
+
+int main(int argc, char **argv) {
+    if (argc &gt; 1) {
+        yyin = fopen(argv[1], "r");
+        if (!yyin) {
+            perror("无法打开文件");
+            return 1;
+        }
+    }
+
+    int token;
+    while ((token = yylex()) != 0) {
+        printf("Token: %d, 文本: %s, 行号: %d\n", token, yytext, line_num);
+    }
+    return 0;
+}
+
+int yywrap() {
+    return 1;  /* 通知Flex文件结束 */
+}</code></pre>
+
+        <h3>yylex() 的工作方式</h3>
+
+        <p><code>yylex()</code> 是Flex生成的词法分析器的核心函数。每次调用它，它都会从输入中读取字符，找到匹配最长的规则，执行对应的动作，然后返回一个整数（Token类型）。如果返回0，表示输入结束。</p>
+
+        <p>Flex内部使用了一个重要的变量<code>yytext</code>——它指向当前匹配到的文本内容。还有一个全局变量<code>yylval</code>——通常用来传递Token的附加信息（比如标识符的字符串、数字的值）。<code>yylval</code>的类型默认是int，但你可以通过定义<code>YYSTYPE</code>宏来改变它。</p>
+
+        <div class="tip">
+            <strong>启动条件的妙用：</strong>字符串字面量的处理是启动条件（Start Condition）的一个经典应用。当遇到第一个双引号时，用 <code>BEGIN(STRING)</code> 切换到字符串模式，在这个模式下，除了双引号之外的所有字符都被当作字符串内容处理。直到遇到结束的双引号，用 <code>BEGIN(INITIAL)</code> 回到初始模式。这样，同一个词法分析器在不同上下文中可以做不同的事情——这是Flex最强大的特性之一。
+        </div>
+
+        <h2>手写递归下降词法分析器</h2>
+
+        <p>虽然Flex已经非常好用，但理解手写词法分析器的原理同样重要。有时候你需要在资源受限的环境（比如嵌入式系统）中编写编译器，或者你的语言有非常特殊的词法规则不适合Flex的模式。在这些情况下，手写词法分析器是唯一的选择。</p>
+
+        <p>手写词法分析器实际上就是一个<strong>状态机</strong>——用一个变量记录当前状态，根据读入的字符决定如何转移到下一个状态。</p>
+
+        <h3>一个简单的状态机实现</h3>
+
+        <pre><code>#include &lt;stdio.h&gt;
+#include &lt;ctype.h&gt;
+#include &lt;string.h&gt;
+
+/* Token类型枚举 */
+typedef enum {
+    TOKEN_EOF = 0,
+    TOKEN_IDENT,
+    TOKEN_NUMBER,
+    TOKEN_PLUS, TOKEN_MINUS, TOKEN_MUL, TOKEN_DIV,
+    TOKEN_LPAREN, TOKEN_RPAREN,
+    TOKEN_SEMI,
+    TOKEN_ERROR
+} TokenType;
+
+/* Token结构 */
+typedef struct {
+    TokenType type;
+    char lexeme[256];
+    int line;
+    int column;
+    int int_value;  /* 如果是数字Token */
+} Token;
+
+/* 词法分析器状态 */
+typedef struct {
+    const char *input;
+    int pos;
+    int line;
+    int column;
+} Lexer;
+
+/* 初始化词法分析器 */
+void lexer_init(Lexer *lexer, const char *input) {
+    lexer-&gt;input = input;
+    lexer-&gt;pos = 0;
+    lexer-&gt;line = 1;
+    lexer-&gt;column = 1;
+}
+
+/* 跳过空白 */
+void lexer_skip_whitespace(Lexer *lexer) {
+    while (lexer-&gt;input[lexer-&gt;pos] != '\0') {
+        char c = lexer-&gt;input[lexer-&gt;pos];
+        if (c == ' ' || c == '\t' || c == '\r') {
+            lexer-&gt;pos++;
+            lexer-&gt;column++;
+        } else if (c == '\n') {
+            lexer-&gt;pos++;
+            lexer-&gt;line++;
+            lexer-&gt;column = 1;
+        } else {
+            break;
+        }
+    }
+}
+
+/* 获取下一个Token */
+Token lexer_next(Lexer *lexer) {
+    Token token = {0};
+    lexer_skip_whitespace(lexer);
+
+    token.line = lexer-&gt;line;
+    token.column = lexer-&gt;column;
+
+    char c = lexer-&gt;input[lexer-&gt;pos];
+
+    if (c == '\0') {
+        token.type = TOKEN_EOF;
+        strcpy(token.lexeme, "EOF");
+        return token;
+    }
+
+    /* 标识符 or 关键字 */
+    if (isalpha(c) || c == '_') {
+        int i = 0;
+        while (isalnum(lexer-&gt;input[lexer-&gt;pos]) || lexer-&gt;input[lexer-&gt;pos] == '_') {
+            token.lexeme[i++] = lexer-&gt;input[lexer-&gt;pos++];
+            lexer-&gt;column++;
+        }
+        token.lexeme[i] = '\0';
+        token.type = TOKEN_IDENT;
+        return token;
+    }
+
+    /* 数字字面量 */
+    if (isdigit(c)) {
+        int i = 0;
+        token.int_value = 0;
+        while (isdigit(lexer-&gt;input[lexer-&gt;pos])) {
+            token.int_value = token.int_value * 10 + (lexer-&gt;input[lexer-&gt;pos] - '0');
+            token.lexeme[i++] = lexer-&gt;input[lexer-&gt;pos++];
+            lexer-&gt;column++;
+        }
+        token.lexeme[i] = '\0';
+        token.type = TOKEN_NUMBER;
+        return token;
+    }
+
+    /* 运算符和分隔符 */
+    token.lexeme[0] = c;
+    token.lexeme[1] = '\0';
+    lexer-&gt;pos++;
+    lexer-&gt;column++;
+
+    switch (c) {
+        case '+': token.type = TOKEN_PLUS; break;
+        case '-': token.type = TOKEN_MINUS; break;
+        case '*': token.type = TOKEN_MUL; break;
+        case '/': token.type = TOKEN_DIV; break;
+        case '(': token.type = TOKEN_LPAREN; break;
+        case ')': token.type = TOKEN_RPAREN; break;
+        case ';': token.type = TOKEN_SEMI; break;
+        default:
+            token.type = TOKEN_ERROR;
+            snprintf(token.lexeme, sizeof(token.lexeme),
+                     "非法字符: '%c' (0x%02x)", c, c);
+            break;
+    }
+    return token;
+}
+
+/* 演示使用 */
+int main() {
+    const char *code = "sum = 42 + 18;";
+    Lexer lexer;
+    lexer_init(&amp;lexer, code);
+
+    Token token;
+    while ((token = lexer_next(&amp;lexer)).type != TOKEN_EOF) {
+        if (token.type == TOKEN_ERROR) {
+            printf("第%d行: 错误 - %s\n", token.line, token.lexeme);
+        } else {
+            printf("第%d行第%d列: Token=%d, 词素=%s",
+                   token.line, token.column, token.type, token.lexeme);
+            if (token.type == TOKEN_NUMBER) {
+                printf(", 值=%d", token.int_value);
+            }
+            printf("\n");
+        }
+    }
+    return 0;
+}</code></pre>
+
+        <h3>缓冲区管理</h3>
+
+        <p>在真实编译器中，词法分析器不能简单地把整个源代码一次性加载到内存——源代码文件可能非常大（几百MB的C++文件并不罕见）。因此，Flex和手写词法分析器都会使用<strong>缓冲区管理</strong>技术：</p>
+
+        <ul>
+            <li><strong>输入缓冲区：</strong>按块读取源代码（通常4KB到8KB），维护一个指针指示当前读取位置。</li>
+            <li><strong>回退缓冲区：</strong>词法分析器经常需要"偷看"下一个字符来决定当前Token的边界。如果"偷看"后发现这个字符不属于当前Token，需要能"退回"这个字符。</li>
+            <li><strong>双缓冲区：</strong>Flex使用双缓冲区实现高效的输入处理——当一个缓冲区读完后，自动切换到另一个缓冲区并开始填充新的数据。</li>
+        </ul>
+
+        <div class="warning">
+            <strong>缓冲区管理的陷阱：</strong>手写词法分析器时，最容易出Bug的地方就是<strong>回退（unread）</strong>逻辑。比如识别"&lt;="时需要先读取"="，发现不是"="后要把它放回去。如果回退逻辑不严谨，就会导致Token边界错误。这也是为什么很多编译器教科书专门讲解"lookahead"设计模式——它用一个固定的lookahead位置来处理预读，避免对输入流的"反悔"操作。
+        </div>
+
+        <h2>Token数据结构设计</h2>
+
+        <p>Token是编译器中最重要的数据结构之一——它是词法分析器和语法分析器之间的桥梁。一个设计良好的Token结构可以大大简化后续阶段的工作。</p>
+
+        <h3>Token类型枚举</h3>
+
+        <p>Token类型通常用一个枚举来定义，涵盖所有可能的词法元素：</p>
+
+        <pre><code>// tokens.h — Token类型定义
+
+typedef enum {
+    // 关键字 (100-199)
+    TOKEN_INT = 100,
+    TOKEN_FLOAT = 101,
+    TOKEN_IF = 102,
+    TOKEN_ELSE = 103,
+    TOKEN_WHILE = 104,
+    TOKEN_RETURN = 105,
+    TOKEN_VOID = 106,
+
+    // 标识符和字面量 (200-299)
+    TOKEN_IDENT = 200,
+    TOKEN_INT_LIT = 201,
+    TOKEN_FLOAT_LIT = 202,
+    TOKEN_STRING_LIT = 203,
+
+    // 运算符 (300-399)
+    TOKEN_PLUS = 300,
+    TOKEN_MINUS = 301,
+    TOKEN_MUL = 302,
+    TOKEN_DIV = 303,
+    TOKEN_ASSIGN = 304,
+    TOKEN_EQ = 305,      // ==
+    TOKEN_NE = 306,      // !=
+    TOKEN_LT = 307,      // &lt;
+    TOKEN_LE = 308,      // &lt;=
+    TOKEN_GT = 309,      // &gt;
+    TOKEN_GE = 310,      // &gt;=
+
+    // 分隔符 (400-499)
+    TOKEN_SEMI = 400,    // ;
+    TOKEN_LPAREN = 401,  // (
+    TOKEN_RPAREN = 402,  // )
+    TOKEN_LBRACE = 403,  // {
+    TOKEN_RBRACE = 404,  // }
+    TOKEN_COMMA = 405,   // ,
+
+    // 特殊Token
+    TOKEN_EOF = 0,
+    TOKEN_ERROR = -1
+} TokenType;</code></pre>
+
+        <h3>位置信息</h3>
+
+        <p>每个Token都应该记录它在源代码中的位置，以便在编译错误时给出精确的提示：</p>
+
+        <pre><code>typedef struct {
+    int line;     /* 行号（从1开始） */
+    int column;   /* 列号（从1开始） */
+    int offset;   /* 在源文件中的字节偏移 */
+} SourceLocation;
+
+typedef struct {
+    TokenType type;
+    SourceLocation loc;
+    union {
+        char *str_value;      /* 标识符/字符串的值 */
+        int int_value;        /* 整数字面量的值 */
+        double float_value;   /* 浮点字面量的值 */
+    } value;
+} Token;</code></pre>
+
+        <p>这样设计的好处是：语法分析器在报告错误时，可以直接输出"第5行第12列: 期望 ';' 但得到 '}' "，让程序员一眼就能定位问题。Clang之所以以友好的错误信息著称，很大程度上就是因为它在每一个Token的位置信息上做得非常精细。</p>
+
+        <h2>常见词法错误处理</h2>
+
+        <p>词法分析器的错误处理原则是：<strong>尽量恢复，不要终止</strong>。也就是说，当遇到一个词法错误时，应该能报告错误并继续扫描，这样编译一次就能发现所有词法错误，而不是"发现一个就停"。</p>
+
+        <p>以下是几种常见的词法错误及处理策略：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>错误类型</th>
+                    <th>例子</th>
+                    <th>处理策略</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>非法字符</td>
+                    <td><code>@</code>、<code>`</code></td>
+                    <td>跳过该字符，报告"非法字符"，继续扫描</td>
+                </tr>
+                <tr>
+                    <td>未闭合字符串</td>
+                    <td><code>"hello world</code></td>
+                    <td>报告"未闭合的字符串"，假设字符串在行尾结束</td>
+                </tr>
+                <tr>
+                    <td>数字溢出</td>
+                    <td><code>99999999999999999999</code></td>
+                    <td>报告"整数溢出"，截断到最大值</td>
+                </tr>
+                <tr>
+                    <td>浮点格式错误</td>
+                    <td><code>1.2.3</code></td>
+                    <td>识别"1.2"，报告后续字符的格式错误</td>
+                </tr>
+                <tr>
+                    <td>不完整的多行注释</td>
+                    <td><code>/* 没有结束</code></td>
+                    <td>报告"未闭合的注释"，在文件末尾报错</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="tip">
+            <strong>一个实用的技巧：</strong>在开发词法分析器时，创建一个"Token转字符串"的调试函数非常有用。像 <code>const char *token_name(TokenType t)</code> 这样的函数，可以将Token类型转换为可读的字符串。当你调试语法分析器时，可以用它来打印Token序列，快速验证词法分析的结果是否正确。这个简单的工具可以节省你大量的调试时间。
+        </div>
+
+        <h2>一段真实的"踩坑"经历</h2>
+
+        <p>在我第一次亲手从头实现词法分析器时，遇到了一个让人抓狂的Bug。我们的语言中有一个 <code>..</code> 运算符（用于范围表达式，类似Rust的 <code>1..5</code>），还有一个 <code>.</code> 运算符（用于访问成员）。但问题来了——输入 <code>1..5</code> 时，词法分析器会把它识别为：数字 <code>1</code>、点 <code>.</code>、点 <code>.</code>、数字 <code>5</code>，而不是我们期望的数字 <code>1</code>、范围运算符 <code>..</code>、数字 <code>5</code>。</p>
+
+        <p>为什么？因为我设计的词法分析器在识别出数字 <code>1</code> 后，下一个字符是 <code>.</code>，它直接匹配了单点规则并返回，根本没给"两点"模式一个机会。</p>
+
+        <p>解决方案很简单——<strong>最长匹配原则</strong>的应用：在匹配运算符时，总是先尝试匹配更长的模式。在Flex中就是先写 <code>..</code> 规则再写 <code>.</code> 规则。在手写词法分析器中，就是在处理小数点时先"预读"下一个字符，看看是不是也是点。</p>
+
+        <pre><code>/* 手写词法分析器中的最长匹配处理 */
+if (c == '.') {
+    if (peek() == '.') {
+        advance();  /* 消费第二个点 */
+        return TOKEN_DOTDOT;  /* 返回".." */
+    }
+    return TOKEN_DOT;  /* 返回单个"." */
+}</code></pre>
+
+        <p>这个经历让我深刻理解了为什么Flex默认采用最长匹配策略——这不是一个随意的设计决定，而是解决实际词法歧义的必然选择。</p>
+
+        <div class="highlight">
+            <strong>教训：</strong>手写词法分析器时，"预读"是最容易出错的操作。推荐的模式是：把"预读"封装成一个明确的函数（如 <code>peek()</code>），把"消费字符"也封装成一个函数（如 <code>advance()</code>）。永远不要让预读和消费的逻辑散落在代码各处——这是Bug的温床。一个经过良好设计的词法分析器，其核心循环应该清晰到看一眼就能理解。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>这一章我们把词法分析的理论付诸实践。我们从Flex的完整语法入手，学习了定义段、规则段、辅助函数段三部分各自的职责，以及启动条件、yylex()工作机制等核心概念。然后我们手写了一个完整的词法分析器，理解了状态机的本质、缓冲区管理的重要性和"预读"的处理技巧。接着讨论了Token数据结构设计的工程决策——类型枚举、位置信息、值联合体。最后，我们整理了常见词法错误的处理策略。</p>
+
+        <p>词法分析器是编译器的"门面"——它是处理源代码的第一个阶段，它的健壮性直接关系到编译器的整体用户体验。一个能在报错时给出精确位置、能一次性发现所有词法错误的分析器，会为后续阶段的调试节省大量时间。</p>
+
+        <p>下一章，我们将进入编译器的核心阶段——<strong>语法分析</strong>。词法分析给了我们Token序列，但Token之间的结构关系是什么？<code>int a = 1 + 2 * 3</code> 和 <code>int a = 1 + 2 * 3 ;</code> 的Token序列虽然差不多，但后者才是合法的程序——语法分析就是用来判定这个合法性的。</p>
+
+        <div class="footer-nav">
+            <a href="03.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="05.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>
