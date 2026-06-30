@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第26章 MLIR与现代编译</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html" class="active">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第26章 MLIR与现代编译</h2>
+
+        <p>大家好，我是你们的讲师。经过前面25章的学习，我们已经走过了从词法分析到代码生成、从经典优化到LLVM工具链的全过程。现在，让我们把目光投向编译器技术最前沿的方向之一——<strong>MLIR（Multi-Level Intermediate Representation）</strong>。</p>
+
+        <p>如果你曾经思考过这样一个问题："LLVM IR已经很好用了，为什么还需要新的IR？"那么这一章就是为你准备的。MLIR由Google于2019年提出，旨在解决传统编译器基础设施在面对领域特定语言（DSL）、硬件加速器（GPU/TPU/NPU）和异构计算时的根本性不足。它不是要替代LLVM，而是在LLVM之上构建一个更灵活的框架——可以这么说，<strong>MLIR是"编译器的编译器"</strong>。</p>
+
+        <div class="highlight">
+            <strong>为什么MLIR如此重要？</strong>传统的两阶段编译（高级IR→低级IR）在面对现代计算需求时力不从心。深度学习的计算图、硬件描述语言的自定义优化、量子计算的量子门操作——这些不同的领域需要不同层次的抽象。MLIR的核心洞察是：<strong>不要试图用一个IR解决所有问题，而是定义一套框架，让用户为不同抽象层级创建自己的IR（即Dialect），并通过渐进式Lowering在不同IR之间平滑过渡。</strong>
+        </div>
+
+        <h2>MLIR的设计哲学</h2>
+
+        <h3>多级IR的动机</h3>
+        <p>回想我们在第11章学习的经典编译器架构：前端将源代码转换为高级IR，优化器在IR上做变换，后端将IR Lowering到目标代码。这个模型对C/C++这类通用语言工作得很好，因为它只有一个"最佳抽象层级"——既保留了足够的信息用于优化，又足够低级以便代码生成。</p>
+
+        <p>但看看现代计算场景：深度学习框架需要表示张量运算（如卷积、矩阵乘），硬件厂商提供自定义加速器（如NPU、TPU），特定领域需要专用优化（如稀疏矩阵、量化推理）。在所有这些场景中，一个固定层级的IR要么太高级（丢失了底层优化的机会），要么太低级（丢失了高层语义信息）。MLIR的答案很简单：<strong>为什么要选一个？用多个IR层级串联起来。</strong></p>
+
+        <h3>Dialect概念</h3>
+        <p>MLIR中最核心的概念就是<strong>Dialect</strong>（方言）。一个Dialect定义了一组相关的Operation、Type、Attribute，以及它们的语义规则。不同的Dialect代表了不同的抽象层级或领域视角。常见的Dialect包括：</p>
+
+        <ul>
+            <li><code>func</code>：函数定义与调用</li>
+            <li><code>arith</code>：基础算术运算（add、mul等）</li>
+            <li><code>affine</code>：仿射循环优化（循环嵌套、依赖分析）</li>
+            <li><code>memref</code>：内存缓冲区操作（alloc、store、load）</li>
+            <li><code>llvm</code>：LLVM IR层面的低级操作</li>
+            <li><code>tosa</code>：张量运算（TensorFlow的HLO lower-level表示）</li>
+        </ul>
+
+        <p>一个MLIR程序可以由多个Dialect的Operation混合组成——这很像自然语言中的"语码混合"（code-switching）。编译器通常从高层Dialect开始，通过一系列<strong>Lowering Pass</strong>逐步转换为底层Dialect，最终生成机器码。</p>
+
+        <h3>Operation/Type/Attribute体系</h3>
+        <p>MLIR中的每个Operation都是一个有明确语义的计算节点。与LLVM IR不同的是，MLIR的Operation是<strong>可扩展</strong>的——你可以通过定义一个新的Dialect来创造全新的Operation类型，而无需修改编译器基础设施。每个Operation可以携带：</p>
+        <ul>
+            <li><strong>Operands</strong>：输入值（SSA形式）</li>
+            <li><strong>Results</strong>：输出值</li>
+            <li><strong>Attributes</strong>：编译期已知的属性（如常量值、维度信息）</li>
+            <li><strong>Regions</strong>：子区域（用于表示控制流、循环体等结构）</li>
+        </ul>
+
+        <h2>Dialect与Operation</h2>
+
+        <h3>Builtin Dialect</h3>
+        <p>MLIR内置了一些核心Dialect，它们是其他所有Dialect的基础。其中最重要的是<code>builtin</code> Dialect，它定义了Module、Func等核心结构：</p>
+
+        <pre><code>// 一个简单的MLIR程序，展示了builtin Dialect
+// 使用 func Dialect 和 arith Dialect
+
+module {
+  func @main() -> i32 {
+    %0 = arith.constant 42 : i32
+    %1 = arith.constant 58 : i32
+    %2 = arith.addi %0, %1 : i32
+    return %2 : i32
+  }
+}
+
+// 逐步Lowering过程（Toy → Affine → MemRef → LLVM）
+//
+// Toy Dialect（高级张量操作）:
+//   %0 = toy.constant dense<[1.0, 2.0]> : tensor<2xf64>
+//   %1 = toy.transpose %0 : tensor<2xf64>
+//
+// Affine Dialect（显式循环）:
+//   affine.for %i = 0 to 2 {
+//     %v = affine.load %buf[%i] : memref<2xf64>
+//     ...
+//   }
+//
+// MemRef Dialect（缓冲区管理）:
+//   %buf = memref.alloca() : memref<2xf64>
+//   memref.store %val, %buf[%idx] : memref<2xf64>
+//
+// LLVM Dialect（最终生成）:
+//   llvm.call @some_function(%val) : (f64) -> ()</code></pre>
+
+        <h3>自定义Dialect与TableGen</h3>
+        <p>定义一个新的Dialect通常借助MLIR的<strong>TableGen（.td）</strong>框架。TableGen是LLVM项目中的一个代码生成工具——你用声明式语言描述Operation的定义，然后TableGen自动生成C++代码。这大大降低了创建新Dialect的门槛：</p>
+
+        <pre><code>// 一个简单的自定义Dialect：Math Dialect
+// 定义在 Math.td 文件中
+
+// 定义Dialect
+def Math_Dialect : Dialect {
+  let name = "math";
+  let description = "高级数学运算Dialect";
+}
+
+// 定义一个Operation：math.square
+def SquareOp : Math_Op<"square"> {
+  let summary = "计算输入值的平方";
+  let arguments = (ins AnyFloat:$input);
+  let results = (outs AnyFloat:$result);
+
+  let assemblyFormat = "$input attr-dict";
+}
+
+// 经过TableGen编译后，会自动生成：
+// - C++ Op类的定义（SquareOp）
+// - 解析/打印逻辑（基于assemblyFormat）
+// - 验证函数、折叠钩子等</code></pre>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Dialect</th>
+                    <th>抽象层级</th>
+                    <th>典型用途</th>
+                    <th>Lowering目标</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>TOSA</td>
+                    <td>高层（张量语义）</td>
+                    <td>TensorFlow模型表示</td>
+                    <td>Linalg</td>
+                </tr>
+                <tr>
+                    <td>Linalg</td>
+                    <td>中高层（结构化算子）</td>
+                    <td>线性代数与张量运算</td>
+                    <td>Affine / SCF</td>
+                </tr>
+                <tr>
+                    <td>Affine</td>
+                    <td>中层（循环与内存）</td>
+                    <td>循环变换、自动并行化</td>
+                    <td>SCF / MemRef</td>
+                </tr>
+                <tr>
+                    <td>SCF</td>
+                    <td>中层（结构化控制流）</td>
+                    <td>循环、条件分支</td>
+                    <td>CF</td>
+                </tr>
+                <tr>
+                    <td>MemRef</td>
+                    <td>中低层（缓冲区管理）</td>
+                    <td>内存分配与访问</td>
+                    <td>LLVM</td>
+                </tr>
+                <tr>
+                    <td>LLVM</td>
+                    <td>底层（接近机器码）</td>
+                    <td>最终代码生成</td>
+                    <td>目标汇编</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>渐进式Lowering管线</h2>
+
+        <p>MLIR最强大的特性就是<strong>渐进式Lowering</strong>（Progressive Lowering）。你不会一步从高级表示跳到机器码，而是通过一系列精心设计的转换步骤，逐步降低抽象层级，每一步都保留足够的语义信息供优化使用。</p>
+
+        <p>官方教程中使用了一个经典的"Toy语言"示例来展示这个过程。Toy语言是一个极简的张量计算语言，其编译过程展示了MLIR的核心工作流：</p>
+
+        <pre><code>// 渐进式Lowering管线全景
+//
+// 输入: def main() { print(reshape([[1, 2], [3, 4]], [4])); }
+//
+// 1. Toy Dialect —— 保留张量语义和高层结构
+//    %0 = toy.constant dense<[[1, 2], [3, 4]]> : tensor<2x2xf64>
+//    %1 = toy.reshape %0 : tensor<2x2xf64> -> tensor<4xf64>
+//    toy.print %1 : tensor<4xf64>
+//
+// 2. ShapeInference Pass —— 推断所有张量的形状
+//    （自动推断出各中间结果的具体维度）
+//
+// 3. Lower to Affine —— 将张量运算转换为显式循环
+//    affine.for %i = 0 to 4 {
+//      %v = affine.load %buf[%i] : memref<4xf64>
+//      ...
+//    }
+//
+// 4. Lower to MemRef —— 引入缓冲区和内存管理
+//    %alloc = memref.alloca() : memref<4xf64>
+//    affine.store %v, %alloc[%i] : memref<4xf64>
+//
+// 5. Lower to LLVM —— 生成LLVM Dialect
+//    llvm.func @main() {
+//      %ptr = llvm.call @malloc(...)
+//      ...
+//    }
+//
+// 6. LLVM后端 —— 生成最终机器码</code></pre>
+
+        <p>这种设计的核心优势是：<strong>每个优化Pass只需理解它所操作的Dialect的语义</strong>。Affine Dialect上的循环融合Pass不需要理解Toy Dialect的reshape语义；MemRef Dialect上的缓冲区复用Pass不需要关心张量的形状信息。这种关注点分离使得编译器变得可组合、可扩展。</p>
+
+        <h2>TVM与深度学习编译</h2>
+
+        <h3>深度学习编译器的独特挑战</h3>
+        <p>深度学习模型的计算图通常包含张量运算（卷积、矩阵乘、归一化等），而且目标硬件多种多样（CPU、GPU、TPU、NPU、FPGA）。传统编译器（如GCC/LLVM）面向标量运算设计，无法高效处理张量级别的优化。这就催生了专门的<strong>深度学习编译器</strong>。</p>
+
+        <h3>TVM的编译流程</h3>
+        <p><strong>TVM</strong>是Apache基金会下的开源深度学习编译器项目，由陈天奇等人发起。它采用了一种与MLIR类似的层级编译策略：</p>
+
+        <ul>
+            <li><strong>Relay IR</strong>（高层）：表示深度学习模型的计算图，包含卷积、池化、激活函数等张量运算。TVM从前端框架（TensorFlow、PyTorch、ONNX）导入模型时，首先转换为Relay IR。</li>
+            <li><strong>TIR（Tensor IR）</strong>（中层）：将张量运算分解为显式的循环嵌套和内存访问。TIR引入了循环变换（分块、展开、重排序）所需的语义信息，是优化执行效率的关键层级。</li>
+            <li><strong>LLVM IR / CUDA</strong>（底层）：将优化后的TIR进一步Lowering到LLVM IR（用于CPU后端）或CUDA代码（用于GPU后端），最终生成目标代码。</li>
+        </ul>
+
+        <h3>AutoTVM自动调优</h3>
+        <p>TVM引入了<strong>AutoTVM</strong>机制，自动搜索最佳的循环变换参数（如分块大小、展开因子、线程绑定等）。AutoTVM的工作原理类似一个机器学习中的超参数搜索过程：</p>
+
+        <ol>
+            <li>定义搜索空间：指定哪些循环变换参数是可调的（如分块大小从8到512）。</li>
+            <li>采样：从搜索空间中选取一组参数配置。</li>
+            <li>评估：在目标硬件上运行生成的代码，测量执行时间。</li>
+            <li>优化：使用基于模型的搜索算法（如XGBoost、遗传算法）预测更好的参数配置。</li>
+            <li>迭代：重复步骤2-4，直到性能收敛或达到最大迭代次数。</li>
+        </ol>
+
+        <div class="tip">
+            <strong>MLIR与TVM的关系：</strong>MLIR和TVM虽然都是多级IR框架，但侧重点不同。MLIR是一个通用的编译器基础设施框架，适用于任何需要自定义IR的场景；TVM则专注于深度学习推理和训练的优化，提供了一套端到端的解决方案。近年来，TVM社区也在探索与MLIR的融合——TVM的TIR可以通过MLIR的接口与其他Dialect互操作。在实践中，两个项目正在趋同：MLIR向下延伸（添加更多低级优化），TVM向上延伸（吸收MLIR的Dialect机制）。
+        </div>
+
+        <h3>MLIR在工业界的应用</h3>
+        <p>MLIR已经被广泛应用于工业编译器项目中：</p>
+        <ul>
+            <li><strong>TensorFlow</strong>：使用MLIR作为统一的模型表示层。TensorFlow的GraphDef被转换为MHLO（Meta HLO）Dialect，然后经过一系列MLIR优化Pass后，Lowering到不同后端。</li>
+            <li><strong>ONNX</strong>：ONNX-MLIR项目将ONNX模型转换为MLIR的ONNX Dialect，然后逐步Lowering到LLVM生成可执行代码。</li>
+            <li><strong>Google的芯片设计</strong>：Google内部使用MLIR的CIRCT（Circuit IR Compilers and Tools）项目来设计硬件描述语言的编译器。</li>
+            <li><strong>Intel oneAPI</strong>：Intel的oneAPI DPC++编译器使用MLIR作为中间层，将SYCL代码编译到CPU、GPU和FPGA。</li>
+        </ul>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们探索了MLIR——这个正在重塑编译器生态的前沿技术框架。我们从MLIR的设计哲学出发，理解了"多级IR"为什么是解决现代计算需求的关键。然后我们深入Dialect和Operation体系，学习了如何通过TableGen定义自定义Dialect，并通过一个多维表格比较了不同Dialect的抽象层级和用途。接着我们用Toy语言的例子完整走了一遍渐进式Lowering管线，看到了多级IR如何让编译器变得可组合。最后，我们通过TVM和AutoTVM了解了深度学习编译器这一MLIR最重要的应用领域。</p>
+
+        <p>MLIR代表了编译器技术的一个重要方向：<strong>从"一刀切"的固定IR，走向"可定制、可组合"的多级IR生态</strong>。如果你是编译器开发者，掌握MLIR会让你在设计DSL和新硬件时游刃有余。</p>
+
+        <p>下一章我们将讨论一个同样激动人心的话题——<strong>AI与编译器</strong>。如果说MLIR是编译器设计理念的革命，那么AI与编译器的结合则是方法论层面的革命：用机器学习来优化编译器，用编译器来优化AI模型，用LLM来辅助编写编译器。第27章"AI与编译器"会为你揭示这场双向奔赴的技术浪潮。</p>
+
+        <div class="footer-nav">
+            <a href="25.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="27.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>
