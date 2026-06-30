@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第16章 代码优化基础</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html" class="active">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第16章 代码优化基础</h2>
+
+        <p>大家好，我是你们的讲师。到目前为止，我们已经走过了编译器的前半程：从词法分析到语法分析，从语义分析到代码生成。我们的编译器已经能够将源代码翻译为目标代码了。但有一个关键问题还没解决——<strong>这段目标代码跑得快吗？</strong></p>
+
+        <p>想象一下，你写了一个排序算法，编译器忠实地将它翻译成了汇编指令。但如果编译器逐字逐句地按照你的代码来翻译——包括那些你手滑写下的冗余变量、那些每次循环都重复计算的表达式、那些其实从来不会被执行的死代码——那么生成的目标代码可能比你手写的汇编慢上好几倍甚至几十倍。而<strong>代码优化（Code Optimization）</strong>，就是编译器用来解决这个问题的"魔法"。</p>
+
+        <p>事实上，现代编译器的优化器占据了整个编译器代码量的 <strong>50% 以上</strong>。GCC 和 LLVM 都有超过 200 个独立的优化 pass。毫不夸张地说，一个编译器的核心竞争力，很大程度上取决于它的优化器的水平。</p>
+
+        <div class="highlight">
+            <strong>核心认知：</strong>代码优化的核心原则是"保持语义等价的前提下提升性能"。编译器绝不能改变程序的"可观察行为"——这是优化不可逾越的红线。而优化之所以可能，是因为程序员写代码时往往会"过度指定"计算过程，编译器可以聪明地"简化"这些过程而不改变最终结果。
+        </div>
+
+        <h2>优化的层次</h2>
+
+        <p>使用过 GCC 或 Clang 的同学一定对 <code>-O0</code>、<code>-O2</code> 这些选项不陌生。这些选项控制了编译器优化的"激进程度"。但你知道每个等级背后具体启用了哪些优化吗？让我们一探究竟。</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>优化等级</th>
+                    <th>含义</th>
+                    <th>典型效果</th>
+                    <th>编译时间</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>-O0</td>
+                    <td>无优化</td>
+                    <td>最快的编译速度，调试体验最佳，所有变量保留在栈上</td>
+                    <td>最快</td>
+                </tr>
+                <tr>
+                    <td>-O1</td>
+                    <td>轻度优化</td>
+                    <td>启用基本优化：分支优化、局部死代码消除、常量折叠</td>
+                    <td>较快</td>
+                </tr>
+                <tr>
+                    <td>-O2</td>
+                    <td>标准优化</td>
+                    <td>生产环境的标配：CSE、内联、循环优化、全局寄存器分配</td>
+                    <td>中等</td>
+                </tr>
+                <tr>
+                    <td>-O3</td>
+                    <td>激进优化</td>
+                    <td>-O2 + 函数内联更激进、循环展开、向量化</td>
+                    <td>较慢</td>
+                </tr>
+                <tr>
+                    <td>-Os</td>
+                    <td>体积优化</td>
+                    <td>在 -O2 基础上禁用会增加代码体积的优化，偏重代码大小</td>
+                    <td>中等</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>每个等级背后是一个长长的优化 pass 列表。以 GCC 12 为例，<code>-O1</code> 启用了大约 80 个 pass，<code>-O2</code> 在此基础上增加了约 100 个 pass，而 <code>-O3</code> 又额外增加了约 20 个更激进的 pass。使用 <code>gcc -Q --help=optimizers</code> 可以查看 GCC 在每个等级下启用了哪些优化。</p>
+
+        <pre><code># 查看 GCC 各优化等级启用的 pass 列表
+$ gcc -O1 -Q --help=optimizers | grep enabled
+$ gcc -O2 -Q --help=optimizers | grep enabled
+
+# 在 LLVM 中查看优化流水线
+$ opt -O2 -debug-pass-manager  # 查看 pass 管理器输出
+$ opt -O3 -S -print-after-all input.ll  # 查看每个 pass 后的 IR 变化</code></pre>
+
+        <p>一个常见的误解是："应该总是用 <code>-O3</code> 追求极致性能"。实际上 <code>-O3</code> 并不总是比 <code>-O2</code> 快——激进的循环展开和函数内联可能导致指令缓存（I-Cache）溢出，反而降低性能。对于大多数应用，<code>-O2</code> 是性能和编译时间的理想平衡点。</p>
+
+        <div class="tip">
+            <strong>经验法则：</strong>发布版本用 <code>-O2</code> 作为默认选项。如果你的程序是 CPU 密集型的计算任务（如科学计算、视频编码），可以尝试 <code>-O3</code> 并结合 <code>-march=native</code> 来启用特定 CPU 架构的优化。对于嵌入式系统或固件，使用 <code>-Os</code> 来最小化代码体积。
+        </div>
+
+        <h2>常见优化 Pass 详解</h2>
+
+        <p>编译器的优化 pass 种类繁多，但有一些是最核心、最常见、也最容易理解的。让我们逐一深入了解。</p>
+
+        <h3>死代码消除（DCE - Dead Code Elimination）</h3>
+
+        <p>死代码消除是最"划算"的优化之一——它既能缩小代码体积，又能提高运行速度，还不会引入任何风险。死代码是指那些执行结果永远不会被使用的代码片段。编译器通过<strong>数据流分析</strong>来判断哪些代码是"死的"。</p>
+
+        <pre><code>// 死代码消除示例
+int example() {
+    int a = 10;       // 赋值后从未使用 → 可消除
+    int b = 20;
+    int c = a + b;    // c 从未使用 → 可消除
+    int d = 30;
+    return d - 5;     // 只有这一行是可观察到的行为
+}
+
+// 优化后的等效代码：
+int example() {
+    return 25;        // 常量折叠也同时生效了！
+}</code></pre>
+
+        <p>死代码消除的难点在于：什么是"可观察行为"需要精确定义。一个变量赋值可能看起来是"死的"，但如果这个变量是 <code>volatile</code> 的，或者赋值操作涉及内存写入（可能被另一线程观察到），那么它就不能被消除。LLVM 的 DCE pass 会检查每个指令是否满足"没有 side effect"且"结果未被使用"的条件。</p>
+
+        <h3>常量折叠与传播（Constant Folding & Propagation）</h3>
+
+        <p><strong>常量折叠</strong>是指在编译期将常量表达式的值计算出来，避免在运行时重复计算。而<strong>常量传播</strong>则是将变量的常量值替换到所有使用该变量的位置，从而为后续的常量折叠创造条件。</p>
+
+        <pre><code>// 常量折叠与传播
+int compute() {
+    int x = 7;
+    int y = x * 4;          // 常量传播：x → 7，然后折叠：7 * 4 = 28
+    int z = y + 10;         // 常量传播：y → 28，然后折叠：28 + 10 = 38
+    return z - 3;           // 折叠：38 - 3 = 35
+}
+
+// 直接优化为：
+int compute() {
+    return 35;
+}
+
+// 更复杂的例子：条件中的常量传播
+int check() {
+    int cond = 1;
+    if (cond) {             // cond 为常量 1，条件永远为真
+        return 100;
+    } else {
+        return 200;         // 这个分支是死代码，被消除
+    }
+}
+
+// 优化为：
+int check() {
+    return 100;
+}</code></pre>
+
+        <p>常量折叠看起来简单，但在实际工程中非常强大。结合<strong>稀疏条件常量传播（SCCP）</strong>——一种更强力的常量传播算法——编译器甚至可以跨基本块、跨循环推导出变量的常量值，从而消除大量冗余计算。</p>
+
+        <h3>函数内联（Inlining）</h3>
+
+        <p>函数内联是编译器最重要的优化之一。它将被调函数的函数体直接"粘贴"到调用点，消除函数调用的开销（参数压栈、栈帧创建、返回跳转、栈帧销毁）。但内联的收益远不止于此——内联后，调用点的上下文信息与被调函数的代码融合，为后续的优化创造了巨大的空间。</p>
+
+        <pre><code>// 函数内联示例
+int add(int a, int b) {
+    return a + b;
+}
+
+int main() {
+    int x = add(3, 4);
+    int y = add(x, 5);
+    return y;
+}
+
+// 内联后（近似）：
+int main() {
+    int x = 3 + 4;       // add(3, 4) 被展开
+    int y = x + 5;       // add(x, 5) 被展开
+    return y;
+}
+
+// 常量折叠后：
+int main() {
+    return 12;
+}</code></pre>
+
+        <p>内联的工程挑战在于：<strong>平衡</strong>。内联太多会急剧增加代码体积，导致 I-Cache 压力增大，反而降低性能。LLVM 使用一套基于启发式（heuristic）的内联决策模型：它会评估被调函数的大小、调用点的频率、函数的调用链深度等因素，只有"收益大于成本"时才进行内联。GCC 则通过 <code>-finline-limit</code> 和 <code>__attribute__((always_inline))</code> 等机制来让程序员控制内联行为。</p>
+
+        <h3>公共子表达式消除（CSE - Common Subexpression Elimination）</h3>
+
+        <p>CSE 的思想很简单：如果一个表达式被计算了多次，且它的操作数在两次计算之间没有改变，那么可以只计算一次，将结果保存下来重复使用。</p>
+
+        <pre><code>// 公共子表达式消除
+int cse_example(int a, int b, int c) {
+    int x = (a + b) * c;        // a + b 第一次出现
+    int y = (a + b) * 10;       // a + b 第二次出现（且 a、b 未改变）
+    return x + y;
+}
+
+// CSE 优化后（概念上）：
+int cse_example(int a, int b, int c) {
+    int t = a + b;              // 公共子表达式被提取
+    int x = t * c;
+    int y = t * 10;
+    return x + y;
+}
+
+// 进一步常量折叠：y = t * 10 无法折叠（除非 t 是常量）
+// 但为后续优化创造了更好的条件</code></pre>
+
+        <p>CSE 的核心依赖是<strong>支配关系（Dominance）</strong>和<strong>可用表达式分析</strong>（我们会在第17章详细讨论）。编译器需要确保在表达式被复用的点上，所有操作数的值都没有被修改。LLVM 的 GVN（Global Value Numbering）pass 是 CSE 的一种更全局的实现，它通过给每个计算值分配"值编号"来识别等价表达式，效果比传统的局部 CSE 好得多。</p>
+
+        <div class="warning">
+            <strong>注意：</strong>CSE 看似安全，但在涉及 volatile 变量或函数调用时需要格外小心。<code>(a + b)</code> 中如果 a 或 b 是 volatile 变量，或者 a 或 b 的值被中间的函数调用修改了，编译器就不能进行 CSE。这也是为什么 CSE 通常在分析完数据流和控制流之后再做判断。
+        </div>
+
+        <h2>优化正确性</h2>
+
+        <p>优化最重要的原则就是：<strong>不能改变程序的语义</strong>。但这句话听起来容易，真正做到非常困难。</p>
+
+        <h3>As-If 规则</h3>
+
+        <p>C++ 标准中有一个著名的 <strong>as-if 规则</strong>：编译器可以对程序进行任何变换，只要变换后的程序与原始程序具有相同的"可观察行为"。什么是可观察行为？写入输出（I/O）、访问 volatile 变量、程序退出状态等。至于寄存器分配、中间计算结果的保留、死代码消除等，只要不影响最终的可观察行为，编译器都可以自由处置。</p>
+
+        <pre><code>// As-If 规则示例
+int as_if_demo() {
+    int result = 0;
+    for (int i = 0; i &lt; 1000000; i++) {
+        result += i;
+    }
+    return result;
+}
+
+// 编译器可以合法地优化为：
+int as_if_demo() {
+    // 直接计算出结果，因为循环没有副作用
+    return 499999500000;
+}
+
+// 但如果循环中有 I/O 操作：
+int as_if_demo_io() {
+    int result = 0;
+    for (int i = 0; i &lt; 1000000; i++) {
+        result += i;
+        printf("%d\n", result);  // I/O 操作，有可观察行为
+    }
+    return result;
+}
+
+// 编译器不能消除这个循环，因为它的输出行为是可见的</code></pre>
+
+        <h3>UB 是优化的"许可证"</h3>
+
+        <p>理解未定义行为（UB）与优化的关系，是区分编译器新手和老手的关键。在 C 和 C++ 中，一旦程序触发了 UB，编译器可以<strong>做任何事情</strong>——包括让程序崩溃、产生错误的结果、甚至删除整个函数。这意味着编译器在处理包含 UB 的代码时，会假设"这种情况永远不会发生"，然后基于这个假设做出激进的优化。</p>
+
+        <div class="highlight">
+            <strong>经典示例：</strong>检查空指针的代码可能被编译器优化掉。
+            <pre><code>void process(int *p) {
+    // 看起来是在防御空指针
+    if (!p) return;
+
+    // 但下面的代码没有使用 p，而是使用 p 的解引用
+    int val = *p + 10;
+
+    // 如果这里又检查一次 p
+    if (!p) {
+        // 编译器可能优化掉这个分支！
+        // 因为上面已经对 *p 解引用了，标准认为"p 在此之后必定非空"
+        // 否则上面解引用时已经触发了 UB
+    }
+}</code></pre>
+            在 <code>-O2</code> 下，第二个 <code>if (!p)</code> 分支几乎肯定会被删除，因为编译器从对 <code>*p</code> 的解引用推导出 <code>p</code> 不为空。这就是 UB 作为"优化许可证"的典型案例。
+        </div>
+
+        <p>这一特性对嵌入式系统和操作系统内核开发者尤为重要。Linux 内核在很长一段时间里就曾被 GCC 的优化"坑"过——内核代码中一些看似无害的空指针检查，在优化后被删除，导致了难以诊断的 bug。这也是为什么内核开发社区最终开发了 <code>__attribute__((noinline))</code> 和 <code>READ_ONCE()/WRITE_ONCE()</code> 等机制来"驯服"优化器。</p>
+
+        <h2>窥孔优化实战</h2>
+
+        <p>以上我们讨论的都是 IR 层面或 AST 层面的优化。而<strong>窥孔优化（Peephole Optimization）</strong>则是在<strong>指令序列的局部</strong>进行的简单模式匹配和替换。它之所以叫"窥孔"，是因为它只通过一个"小窗口"观察相邻的几条指令，做出局部优化决策。</p>
+
+        <p>窥孔优化的核心思想是：遍历指令序列，检查固定大小的"窗口"内的指令模式，如果匹配到某种可优化的模式，就用更高效的等价指令替换。</p>
+
+        <pre><code>// 窥孔优化的典型模式
+
+// 1. 强度削减：用移位替代乘除
+// 原始指令：
+mov eax, [x]
+imul eax, 8        // x * 8
+// 窥孔优化后：
+mov eax, [x]
+shl eax, 3         // x &lt;&lt; 3（用移位代替乘法）
+
+// 2. 冗余 load/store 消除
+// 原始指令：
+mov eax, [x]       // 加载 x 到 eax
+mov [temp], eax    // 存回 temp
+mov ebx, [temp]    // 从 temp 加载
+add ebx, 10        // 使用 ebx
+// 窥孔优化后：
+mov eax, [x]       // 加载 x 到 eax
+                     // 临时变量 temp 被消除
+mov ebx, eax       // 直接使用 eax
+add ebx, 10
+
+// 3. 代数简化
+// 原始指令：
+add eax, 0         // + 0 无意义
+// 窥孔优化后：
+// (整条指令被删除)
+
+// 原始指令：
+imul ebx, 1        // × 1 无意义
+// 窥孔优化后：
+// (整条指令被删除)</code></pre>
+
+        <p>窥孔优化的实现通常使用<strong>贪心模式匹配</strong>：逐个遍历指令，在每个位置尝试所有可用的优化模式，如果匹配成功则替换，然后重新从替换位置开始扫描。这种简单策略在实际中非常高效，因为：</p>
+
+        <ul>
+            <li>优化模式可以独立添加——新增一个模式不用修改其他模式的代码</li>
+            <li>局部匹配的计算代价很低，可以多次迭代执行</li>
+            <li>不同优化模式可以产生"涟漪效应"——一次优化创造了新的优化机会</li>
+        </ul>
+
+        <p>LLVM 的窥孔优化器通过 <code>-peephole-opts</code> 启用，而 GCC 则在 RTL（Register Transfer Language）层面实现了类似的优化。在实际编译流水线中，窥孔优化通常被安排在<strong>代码生成的后期和二进制操作之前</strong>，以便捕捉那些由前面优化 pass 产生的、未经处理的局部低效模式。</p>
+
+        <div class="tip">
+            <strong>动手练习：</strong>使用 <code>gcc -S -O0 -fpeephole2</code> 和 <code>gcc -S -O0</code> 分别编译一个小函数，然后对比生成的汇编代码，观察窥孔优化带来的差异。你也可以使用 LLVM 的 <code>llc -print-after-all</code> 来查看每个目标代码优化 pass 的效果。这些工具是理解编译器优化的最佳学习资料。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们开启了编译器中最为迷人的篇章——代码优化。我们首先了解了 GCC/Clang 的优化等级体系（-O0 到 -O3、-Os）以及每个等级启用的核心 pass 类型。然后深入学习了四种最经典的优化 pass：死代码消除（DCE）、常量折叠与传播、函数内联、公共子表达式消除（CSE），并通过代码示例直观地理解了它们的工作原理。</p>
+
+        <p>在优化正确性方面，我们讨论了 as-if 规则如何定义优化的边界，以及 UB 为何被称为"优化的许可证"——这既是编译器高效优化的基础，也是需要程序员高度警惕的领域。最后，我们通过窥孔优化的实战模式，看到了编译器如何在指令序列的"小窗口中"做出精妙的局部优化决策。</p>
+
+        <p>从下一章开始，我们将深入编译器优化的"核心技术"——<strong>数据流分析</strong>。第17章"数据流分析"将为你揭示编译器如何分析和推理程序中数据的流动，这是所有高级优化的理论基石。</p>
+
+        <div class="footer-nav">
+            <a href="15.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="17.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>
