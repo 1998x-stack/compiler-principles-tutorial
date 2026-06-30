@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第21章 即时编译(JIT)</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html" class="active">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第21章 即时编译(JIT)</h2>
+
+        <p>大家好，我是你们的讲师。到目前为止，我们讨论的所有编译器工作模式都是<strong>AOT（Ahead-Of-Time）</strong>编译——你在编写完代码后运行编译命令，编译器一次性将整个程序翻译为机器码，然后这个静态的可执行文件就可以独立运行了。典型的 AOT 编译语言有 C、C++、Rust、Go。</p>
+
+        <p>但世界上还有另一大类语言——JavaScript、Python、Java（部分阶段）、Julia、Lua——它们采用了一种截然不同的执行模型。你写一段代码，保存，然后直接运行。不需要预先编译，不需要漫长的链接过程，程序立刻就启动了。但它们的性能在早期版本中确实不尽人意。是什么让现代 JavaScript 引擎（V8、SpiderMonkey）的代码执行速度快到足以支撑 Chrome 浏览器、Node.js 服务器和 VS Code 这样的大型桌面应用？答案就是<strong>即时编译（Just-In-Time Compilation, JIT）</strong>。</p>
+
+        <div class="highlight">
+            <strong>核心认知：</strong>JIT 不是"解释器"也不是"AOT 编译器"，而是两者的融合体。它巧妙地利用了运行时信息来做出 AOT 编译器不可能做到的优化决策。JIT 是"动态编译"和"自适应优化"的代名词，是现代动态语言得以在性能上接近静态语言的关键技术。
+        </div>
+
+        <h2>JIT 与 AOT：一场深刻的权衡</h2>
+
+        <p>要理解 JIT 的价值，需要先理解它和 AOT 之间的本质权衡。</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>维度</th>
+                    <th>AOT 编译</th>
+                    <th>JIT 编译</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>启动时间</td>
+                    <td>启动前需要完整的编译+链接过程，大型项目需要数十分钟</td>
+                    <td>启动时只需要加载最低限度的运行时系统，秒级启动</td>
+                </tr>
+                <tr>
+                    <td>优化时机</td>
+                    <td>编译时做所有决策，缺乏运行时信息</td>
+                    <td>运行时收集 Profile 信息，基于实际执行模式做优化</td>
+                </tr>
+                <tr>
+                    <td>峰值性能</td>
+                    <td>可达极高水平（LTO + PGO）</td>
+                    <td>经过充分预热后接近或达到 AOT 水平</td>
+                </tr>
+                <tr>
+                    <td>适应性</td>
+                    <td>针对特定 CPU 微架构优化</td>
+                    <td>可检测 CPU 特性（如 AVX-512 可用性）并动态适配</td>
+                </tr>
+                <tr>
+                    <td>内存开销</td>
+                    <td>编译后生成静态文件，运行时无额外开销</td>
+                    <td>运行时需要保持编译器、Profile 数据、缓存代码，内存开销大</td>
+                </tr>
+                <tr>
+                    <td>部署灵活性</td>
+                    <td>需要为每个目标平台单独编译</td>
+                    <td>一份字节码可在所有平台上运行</td>
+                </tr>
+                <tr>
+                    <td>场景选择</td>
+                    <td>系统软件、嵌入式、对启动时间不敏感的服务器应用</td>
+                    <td>Web 应用、脚本语言、REPL、数据库 JIT 表达式编译</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>值得注意的是，AOT 和 JIT 并不是非此即彼的选择。Java 的 <code>javac</code> 先将源代码编译为字节码（AOT），然后 JVM 在运行时用 JIT 将热点字节码动态编译为机器码。Android 的 ART 运行时支持三种模式：纯解释执行、AOT 编译（安装时）、以及 JIT 混合模式。现实中的系统往往根据需求采用<strong>分层策略</strong>——这正是我们后面要讲的内容。</p>
+
+        <h2>LLVM ORC JIT 实战</h2>
+
+        <p>LLVM 不仅仅是一个 AOT 编译基础设施——它提供了强大的 JIT 编译支持。从早期的 <strong>MCJIT</strong> 到如今的 <strong>ORC JIT</strong>，LLVM 的 JIT 基础设施经历了重大重构。ORC（Optimized Remote Compilation）JIT 是 LLVM 的下一代 JIT API，自 LLVM 10 以来已成为默认 JIT 引擎。</p>
+
+        <h3>ORC JIT 核心概念</h3>
+
+        <p>ORC JIT 将 JIT 编译过程抽象为几个核心组件：</p>
+
+        <ul>
+            <li><strong>LLJIT（LLVM JIT）</strong>：ORC 提供的最高层 API，开箱即用。你只需要创建 IR 模块，交给 LLJIT 即可自动完成编译、链接和符号解析。</li>
+            <li><strong>JITDylib</strong>：JIT 的动态库抽象。每个 JITDylib 管理一组代码模块和它们的符号表。你可以动态添加或移除 JITDylib。</li>
+            <li><strong>Layer</strong>：编译管道的抽象。例如 <code>IRTransformLayer</code> 可以对 IR 进行自定义优化，<code>ObjectLinkingLayer</code> 负责将目标文件链接到进程中。</li>
+            <li><strong>LazyCallThroughManager</strong>：延迟编译的核心。当某个函数尚未编译时，调用会被拦截，触发即时编译后再重试。</li>
+        </ul>
+
+        <p>下面是一个使用 LLJIT API 的完整示例——它从字符串中解析 IR，动态编译并执行：</p>
+
+        <pre><code>#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/SourceMgr.h"
+
+using namespace llvm;
+using namespace llvm::orc;
+
+int main() {
+    // 1. 创建 LLJIT 实例
+    auto JIT = ExitOnErr(LLJITBuilder().create());
+
+    // 2. 从字符串创建 IR 模块
+    SMDiagnostic Err;
+    auto M = parseIRString(R"(
+        define i32 @add(i32 %a, i32 %b) {
+            %result = add i32 %a, %b
+            ret i32 %result
+        }
+    )", Err, *JIT-&gt;getDataLayout());
+
+    // 3. 将模块添加到 JIT
+    ExitOnErr(JIT-&gt;addIRModule(std::move(M)));
+
+    // 4. 查找并执行函数
+    auto AddSym = ExitOnErr(JIT-&gt;lookup("add"));
+    auto *Add = (int(*)(int, int))AddSym.getAddress();
+
+    int result = Add(3, 4);  // 输出: 7
+    llvm::outs() &lt;&lt; "3 + 4 = " &lt;&lt; result &lt;&lt; "\n";
+
+    return 0;
+}</code></pre>
+
+        <p>这个例子展示了 ORC JIT 最基础的用法。在实际项目中，你还可以通过 <code>setProcessAllSections</code> 注册自定义的运行时符号，通过 <code>IRTransformLayer</code> 插入自定义的优化 pass，甚至通过 <code>LazyCallThroughManager</code> 实现按需编译（lazy compilation）——函数在第一次被调用时才编译，避免编译那些从未执行过的代码。</p>
+
+        <div class="tip">
+            <strong>进阶实践：</strong>PyTorch 的 <code>TorchDynamo</code> 和 TensorFlow 的 <code>XLA</code> 都使用 LLVM JIT 将计算图编译为机器码。它们的基本流程是：前端框架捕获计算图 → 转换为 MLIR 或自己的 IR → 调用 LLVM JIT 编译为目标代码 → 执行。编译器从业者可以深入学习 <code>llvm/examples/HowToUseJIT/</code> 和 <code>llvm/examples/ORCV2Examples/</code> 中的示例代码。
+        </div>
+
+        <h2>Tracing JIT：V8 TurboFan</h2>
+
+        <p>Tracing JIT 和传统的 Method JIT（以函数/方法为编译单元）不同，它追踪<strong>程序执行的实际路径</strong>，只编译那些"确实被执行到的代码路径"。这种技术特别适合动态语言，因为动态语言的类型信息只有运行时才能确定。</p>
+
+        <p>Google V8 是世界上最复杂的 Tracing JIT 实现之一。它驱动着 Chrome 浏览器和 Node.js 运行时。V8 的执行架构经历了多次重大演进，目前的核心是 <strong>Ignition（解释器）+ TurboFan（优化编译器）</strong>双引擎架构：</p>
+
+        <h3>解释执行 → 类型信息收集</h3>
+
+        <p>V8 首先通过 <strong>Ignition</strong> 解释器执行 JavaScript 字节码。解释执行的每一条指令都会附带<strong>类型反馈（Type Feedback）</strong>的收集——例如，当遇到 <code>a + b</code> 时，解释器会记录 <code>a</code> 和 <code>b</code> 的实际类型（是整数、浮点数、还是字符串）。这些类型反馈被存储在 <strong>Feedback Vector</strong> 中。</p>
+
+        <p>当一个函数被执行了足够多次（V8 中称为"变热"），TurboFan 就会基于收集到的类型信息对该函数进行优化编译。</p>
+
+        <h3>编译优化与二次假设</h3>
+
+        <p>TurboFan 的一个重要特点是在做优化时会做出<strong>乐观假设（Optimistic Assumptions）</strong>：</p>
+
+        <pre><code>// 假设下面这个函数被调用了很多次，且每次 a, b 都是整数
+function add(a, b) {
+    return a + b;
+}
+
+// TurboFan 编译时的假设：
+// 1. a 和 b 都是 32 位整数 → 使用 int32 add 指令
+// 2. 结果不会溢出 → 不需要溢出检查
+// 3. 没有副作用 → 可以内联和常量传播
+
+// 优化后的机器码（伪代码）：
+// mov eax, [rdi]       ; 加载 a
+// mov ebx, [rsi]       ; 加载 b
+// add eax, ebx         ; 整数加法
+// mov [rdx], eax       ; 存储结果
+// ret</code></pre>
+
+        <p>这些乐观假设大大提升了优化后的代码质量——整数加法用一条 CPU 指令就完成了，不需要检查类型，不需要拆箱（unboxing）操作。但关键在于：<strong>如果假设被打破了怎么办？</strong></p>
+
+        <h3>Deoptimization（OSR 栈替换）</h3>
+
+        <p>V8 的精妙之处在于它有一个<strong>安全网（Safety Net）</strong>：如果运行时发现某个假设不成立（比如参数从一个整数变成了一个字符串对象），TurboFan 优化过的代码会触发<strong>Deoptimization（去优化）</strong>——执行流退回到 Ignition 解释器中，在那个位置重新开始解释执行。</p>
+
+        <p>这个过程称为 <strong>OSR（On-Stack Replacement）</strong>——即使在函数执行的中途，也可以从一个优化版本"弹出"到解释器版本，然后再继续执行。这就像在一架飞行中的飞机上更换引擎——听起来匪夷所思，但在 V8 中却是常规操作。</p>
+
+        <div class="warning">
+            <strong>性能陷阱：</strong>Deoptimization 虽然优雅，但它是有代价的。频繁的去优化会导致"JIT 震荡"——函数反复被优化→去优化→再优化。这种情况通常发生在<strong>多态（Polymorphic）</strong>调用点上——例如一个函数的参数类型频繁变化（有时是整数，有时是字符串）。V8 引入了多种机制来避免震荡，包括收集更长时间的类型反馈信息才触发编译、生成更通用的代码版本等。
+        </div>
+
+        <h2>分层编译</h2>
+
+        <p>分层编译是现代 JIT 引擎的"标准架构"。它的核心思想是：<strong>不在所有代码上一开始就投入大量编译资源，而是根据代码的执行热度逐步升级编译级别</strong>。</p>
+
+        <p>以 Java HotSpot VM 为例，它使用了经典的三层架构：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Tier</th>
+                    <th>名称</th>
+                    <th>执行方式</th>
+                    <th>特点</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Tier 0</td>
+                    <td>解释器</td>
+                    <td>逐条解释字节码</td>
+                    <td>启动极快，零编译开销，但执行最慢</td>
+                </tr>
+                <tr>
+                    <td>Tier 1</td>
+                    <td>C1 编译器（Client/Baseline JIT）</td>
+                    <td>快速编译为简单优化的机器码</td>
+                    <td>编译速度快（毫秒级），带基本优化（死代码消除等），不做深度分析</td>
+                </tr>
+                <tr>
+                    <td>Tier 2</td>
+                    <td>C2 编译器（Server/Optimizing JIT）</td>
+                    <td>深度编译为高度优化的机器码</td>
+                    <td>编译慢（秒级），但执行极快，包含所有高级优化</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>分层编译的典型执行流程如下：</p>
+
+        <pre><code>函数执行流程（基于热度）：
+
+[首次调用]
+    ↓
+Tier 0: 解释执行
+    ↓  (调用计数器达到阈值 ~5000次)
+    ↓
+Tier 1: C1 编译——快速生成基线机器码
+    ↓  (再次达到阈值 ~30000次)
+    ↓
+Tier 2: C2 编译——后台进行深度优化
+         同时 Tier 1 版本的代码继续执行
+    ↓  (C2 编译完成)
+    ↓
+        用 C2 优化版本替换 Tier 1 版本（OSR 或方法入口替换）
+         一直执行直到程序结束或去优化发生</code></pre>
+
+        <p>这种分层设计妙在何处？</p>
+
+        <ul>
+            <li><strong>大多数代码从未达到 Tier 2</strong>：程序中大量的初始化代码、错误处理路径、一次性的配置代码——它们不值得花几秒钟去深度优化。解释执行或快速编译就足够了。</li>
+            <li><strong>Tier 1 为 Tier 2 收集 Profile</strong>：Tier 1 版本的代码在执行时会收集分支概率、类型反馈、调用频率等 Profile 信息。这些信息馈送给 Tier 2，让优化器做出更好的决策。</li>
+            <li><strong>Tier 2 在后台编译</strong>：Tier 2 的编译在单独的后台线程中进行，不阻塞程序执行。编译期间 Tier 1 版本继续运行，编译完成后通过"安全点（Safepoint）"机制进行代码替换。</li>
+        </ul>
+
+        <div class="highlight">
+            <strong>业界观察：</strong>V8 也采用了类似的分层策略：Ignition（Tier 0）→ SparkPlug（非优化编译，类似 C1）→ TurboFan（优化编译，类似 C2）。Mozilla SpiderMonkey 有 4 层。LuaJIT 有 2 层（解释器 + JIT）。GraalVM 的 Truffle 框架实现了语言无关的分层编译。每一层的目标是：在前一层的基础上，以合理的编译成本换取额外的执行性能提升。层数越多，调优空间越大，但实现复杂度也急剧上升。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们进入了 JIT 编译的精彩世界。首先通过 JIT vs AOT 的对比，理解了两者之间关于启动时间、峰值性能、运行时信息的深刻权衡。然后我们实战了 LLVM ORC JIT API——用几十行 C++ 代码实现了一个运行时编译执行 IR 的 JIT 引擎。接着我们深入剖析了 V8 TurboFan 的 Tracing JIT 机制，重点关注了 Ignition 解释器的类型反馈收集、TurboFan 的乐观假设编译，以及 Deoptimization/OSR 这个魔法般的"空中换引擎"技术。最后，我们介绍了分层编译架构——解释器、快速编译器、优化编译器的分工协作。</p>
+
+        <p>JIT 编译器的设计是编译器工程中最富有创造力的领域之一——它要在"编译速度"和"执行速度"之间做出精妙的权衡，还要处理动态语言特有的类型不确定性。下一章，我们将从一个完全不同的角度审视编译器——不再关注"如何生成更快的代码"，而是关注"如何证明程序是正确的"。第22章"静态分析与形式验证"将带你走进抽象解释、符号执行和 CompCert 形式化验证编译器的世界，敬请期待。</p>
+
+        <div class="footer-nav">
+            <a href="20.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="22.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

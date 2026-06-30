@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第20章 高级优化技术</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html" class="active">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第20章 高级优化技术</h2>
+
+        <p>大家好，我是你们的讲师。前两章我们分别讨论了过程内优化和过程间优化——它们是从"单函数"到"整个程序"的广度扩展。本章，我们将把目光转向<strong>深度</strong>：当编译器决定"做什么优化"之后，还有更深一层的问题——<strong>怎么做</strong>才能把硬件的潜力榨干？</p>
+
+        <p>现代 CPU 早已不是单条单条执行指令的简单机器。它们拥有多级缓存、超标量流水线、SIMD 向量单元、多核并行能力。然而，大多数高级语言程序天生是<strong>串行</strong>和<strong>标量</strong>的——我们写的是 <code>for (i = 0; i &lt; N; i++) { a[i] = b[i] + c[i]; }</code>，而不是 <code>vaddps ymm0, ymm1, ymm2</code>。编译器的任务，就是把你写的串行标量代码，自动转换为能最大限度利用硬件并行能力的机器指令。这就是<strong>高级优化技术</strong>的使命。</p>
+
+        <div class="highlight">
+            <strong>核心认知：</strong>高级优化技术不是"可有可无的锦上添花"。对于计算密集型应用（科学计算、图像处理、AI 推理、加密算法），编译器能否正确应用向量化和循环变换，直接决定了最终代码的性能——差距通常是 <strong>2x 到 20x</strong>。这也是为什么 HPC（高性能计算）社区极度依赖编译器优化能力的提升。
+        </div>
+
+        <h2>SIMD 向量化原理</h2>
+
+        <p><strong>SIMD（Single Instruction, Multiple Data）</strong>——单指令多数据——是现代 CPU 提供的一种<strong>数据级并行（Data-Level Parallelism）</strong>能力。一条 SIMD 指令可以同时对多个数据元素执行相同的操作。</p>
+
+        <p>想象一下这个场景：你要给 8 个杯子里都倒满水。标量方式是一次倒一杯，重复 8 次；SIMD 方式是你找到一个有 8 个出水口的"花洒"，一次操作同时装满 8 个杯子。</p>
+
+        <h3>SIMD 指令集家族</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>架构</th>
+                    <th>指令集</th>
+                    <th>寄存器宽度</th>
+                    <th>可同时操作的元素数(float)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>x86</td>
+                    <td>MMX</td>
+                    <td>64 位</td>
+                    <td>2</td>
+                </tr>
+                <tr>
+                    <td>x86</td>
+                    <td>SSE/SSE2</td>
+                    <td>128 位</td>
+                    <td>4</td>
+                </tr>
+                <tr>
+                    <td>x86</td>
+                    <td>AVX/AVX2</td>
+                    <td>256 位</td>
+                    <td>8</td>
+                </tr>
+                <tr>
+                    <td>x86</td>
+                    <td>AVX-512</td>
+                    <td>512 位</td>
+                    <td>16</td>
+                </tr>
+                <tr>
+                    <td>ARM</td>
+                    <td>NEON</td>
+                    <td>128 位</td>
+                    <td>4</td>
+                </tr>
+                <tr>
+                    <td>ARM</td>
+                    <td>SVE</td>
+                    <td>128-2048 位</td>
+                    <td>4-64</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>自动向量化的合法性检查</h3>
+
+        <p>编译器想要将一个循环自动向量化，必须要通过<strong>合法性检查</strong>。最核心的检查有两项：</p>
+
+        <ul>
+            <li><strong>无循环携带依赖（No Loop-Carried Dependence）</strong>：循环的不同迭代之间不能有数据依赖。例如 <code>a[i] = a[i-1] + 1</code> 的第 i 次迭代依赖于第 i-1 次迭代的结果，无法直接向量化（每次迭代的结果不同，无法用一条 SIMD 指令同时计算）。</li>
+            <li><strong>连续内存访问（Contiguous Memory Access）</strong>：被向量化的内存访问模式最好是<strong>步长为 1</strong>的连续访问（unit-stride），这样才能直接加载到向量寄存器中。跨步访问（stride > 1）或索引间接访问（a[b[i]]）通常会阻止向量化。</li>
+        </ul>
+
+        <p>下面是一个可向量化 vs 不可向量化的对比：</p>
+
+        <pre><code>// 可向量化：迭代间无依赖，连续访问
+for (int i = 0; i &lt; N; i++) {
+    c[i] = a[i] + b[i];  // 每次迭代独立
+}
+
+// 不可向量化：循环携带依赖
+for (int i = 1; i &lt; N; i++) {
+    a[i] = a[i-1] * 2;  // 第 i 次依赖第 i-1 次的结果
+}
+
+// 不可向量化：非连续内存访问
+for (int i = 0; i &lt; N; i++) {
+    a[i] = b[strided_index[i]] * 2;  // 间接访问，编译器无法确认无别名冲突
+}
+
+// 可向量化（带运行时检查）：指针可能有重叠
+void add_arrays(float *__restrict__ a, float *__restrict__ b, float *__restrict__ c, int n) {
+    // __restrict__ 告诉编译器指针不重叠，帮助向量化
+    for (int i = 0; i &lt; n; i++) {
+        c[i] = a[i] + b[i];
+    }
+}</code></pre>
+
+        <div class="tip">
+            <strong>实践技巧：</strong>C/C++ 的 <code>__restrict__</code> 关键字是帮助编译器向量化的重要工具。它告诉编译器：通过该指针访问的内存区域不会被任何其他指针访问。没有这个提示，编译器出于安全考虑必须假设指针可能重叠（aliasing），从而放弃向量化。此外，使用 <code>#pragma GCC ivdep</code> 或 <code>#pragma clang loop vectorize(enable)</code> 可以主动告诉编译器"我保证这个循环没有依赖关系，请放心向量化"。
+        </div>
+
+        <h2>循环变换技术</h2>
+
+        <p>向量化只是编译器处理循环的众多手段之一。为了让程序更好地利用缓存层次结构、暴露更多的并行性，编译器还会对一个循环进行多种<strong>变换（Transformation）</strong>。下面是最重要的几种。</p>
+
+        <h3>循环交换（Loop Interchange）</h3>
+
+        <p>循环交换交换嵌套循环的内外层顺序。它的主要目的是改善<strong>数据局部性（Data Locality）</strong>——让内存访问模式与数据的存储顺序一致，从而减少 cache miss。</p>
+
+        <p>看一个经典的矩阵乘法例子：</p>
+
+        <pre><code>// 交换前：外层 i，内层 j（按行遍历 A，按列遍历 B）
+for (int i = 0; i &lt; N; i++) {
+    for (int j = 0; j &lt; N; j++) {
+        C[i][j] = A[i][j] + B[j][i];  // B[j][i] 按列访问，cache 不友好！
+    }
+}
+
+// 交换后：外层 j，内层 i（都是按行遍历）
+for (int j = 0; j &lt; N; j++) {
+    for (int i = 0; i &lt; N; i++) {
+        C[i][j] = A[i][j] + B[j][i];  // 所有数组都是按行访问！
+    }
+}</code></pre>
+
+        <p>在 C/C++ 中，二维数组是<strong>行优先（Row-Major）</strong>存储的：<code>A[i][j]</code> 和 <code>A[i][j+1]</code> 在内存中是相邻的，而 <code>A[i][j]</code> 和 <code>A[i+1][j]</code> 之间间隔了 <code>N</code> 个元素。按行遍历时，每次 cache line 加载都能被充分利用；按列遍历时，每次访问都可能 miss——这就是所谓的"缓存抖动（Cache Thrashing）"。</p>
+
+        <h3>循环融合与分布</h3>
+
+        <p><strong>循环融合（Loop Fusion）</strong>将多个具有相同循环边界的循环合并为一个。这么做的好处是：减少循环控制开销，提高数据重用性（第一个循环计算的结果可以立即在第二个循环中使用，而不必写出到内存再读回来）。</p>
+
+        <p><strong>循环分布（Loop Distribution）</strong>则恰恰相反——将一个大的循环拆分为多个小循环。这通常是为了帮助其他优化：一个大循环因为内部包含循环携带依赖而无法向量化，但如果将不相关的计算部分分离出去，剩下的"干净"部分就可以向量化了。</p>
+
+        <pre><code>// 融合前：两个独立循环遍历相同区间
+for (int i = 0; i &lt; N; i++) a[i] = b[i] * 2;
+for (int i = 0; i &lt; N; i++) c[i] = a[i] + d[i];  // 需要从内存重读 a
+
+// 融合后：一个循环完成所有工作，a[i] 在寄存器中直接使用
+for (int i = 0; i &lt; N; i++) {
+    a[i] = b[i] * 2;
+    c[i] = a[i] + d[i];  // a[i] 还在寄存器里！
+}</code></pre>
+
+        <h3>循环展开（Loop Unrolling）</h3>
+
+        <p><strong>循环展开</strong>将循环体复制多份，减少循环控制指令（条件判断、跳转）的执行次数。这在循环次数较少时效果尤为明显。</p>
+
+        <pre><code>// 展开前
+for (int i = 0; i &lt; 4; i++) {
+    a[i] = b[i] + c[i];
+}
+
+// 展开后（4次完全展开）
+a[0] = b[0] + c[0];
+a[1] = b[1] + c[1];
+a[2] = b[2] + c[2];
+a[3] = b[3] + c[3];</code></pre>
+
+        <p>完全展开消除了所有循环开销，代价是代码体积增大。现代编译器通常采用<strong>部分展开</strong>策略：例如将循环展开为 4 份，每次迭代处理 4 个元素，剩余部分用"尾循环（epilogue loop）"处理。LLVM 的 <code>UnrollLoopPass</code> 会根据循环体大小、循环次数是否已知、目标架构的特性等因素决定展开因子。</p>
+
+        <div class="warning">
+            <strong>注意：</strong>循环展开是一把"精致的手术刀"而不是大锤。过度展开会导致代码膨胀，损害指令缓存（I-Cache）的命中率。对于循环体很小但迭代次数很多的循环，适度的展开（如 2x 或 4x）通常是最优的。在 <code>-Os</code>（优化体积）模式下，编译器会非常克制地使用循环展开。
+        </div>
+
+        <h2>Loop Interchange 深度案例：矩阵乘法</h2>
+
+        <p>为了更好地展示循环交换的效果，我们来看一个完整的矩阵乘法 <code>C = A * B</code> 的例子。</p>
+
+        <pre><code>// 朴素实现：i-k-j 顺序
+void matmul_ijk(int n, double A[n][n], double B[n][n], double C[n][n]) {
+    for (int i = 0; i &lt; n; i++)
+        for (int k = 0; k &lt; n; k++)
+            for (int j = 0; j &lt; n; j++)
+                C[i][j] += A[i][k] * B[k][j];
+                // A[i][k] 是标量（每次不变），B[k][j] 按行访问 ✓
+                // C[i][j] 按行访问 ✓
+}
+
+// 低效实现：i-j-k 顺序（最常见的错误写法）
+void matmul_ijk_bad(int n, double A[n][n], double B[n][n], double C[n][n]) {
+    for (int i = 0; i &lt; n; i++)
+        for (int j = 0; j &lt; n; j++)
+            for (int k = 0; k &lt; n; k++)
+                C[i][j] += A[i][k] * B[k][j];
+                // A[i][k] 按行访问 ✓
+                // B[k][j] 按列访问 ✗ —— 每次访问都跨一行！
+                // C[i][j] 在 innermost 循环中没有更新，浪费！
+}</code></pre>
+
+        <p>在 i-j-k 顺序中，最内层循环 <code>B[k][j]</code> 的访问模式是<strong>按列</strong>的。对于大小为 n x n 的矩阵，相邻两次循环迭代中 <code>B[k][j]</code> 的地址相隔 <code>n * sizeof(double)</code> 字节。当 n 很大时（如 n=1024），每个元素访问都会产生一次 cache miss。性能差距有多大？</p>
+
+        <p>在典型的 x86 机器上，对于 1024x1024 的双精度矩阵：</p>
+        <ul>
+            <li>i-k-j 顺序（cache 友好）：约 0.3 GFlops（低效，仍能利用地方性）</li>
+            <li>i-j-k 顺序（cache 不友好）：约 0.02 GFlops，慢 15 倍以上</li>
+            <li>经过分块（tiling）+向量化+展开的优化版本：可达 10-20 GFlops</li>
+        </ul>
+
+        <p>这个案例清晰地向我们展示了：<strong>循环顺序的选择对性能有数量级的影响</strong>。手动编写高性能数值计算代码时，程序员需要自己注意这些细节；而编译器通过循环交换可以自动优化——但前提是编译器能证明这种交换不改变程序的语义（在浮点数场景下，由于交换律不精确成立，编译器有时会保守行事）。</p>
+
+        <h2>软件流水线</h2>
+
+        <p><strong>软件流水线（Software Pipelining）</strong>是一种非常精妙的指令调度技术，主要应用于 VLIW（超长指令字）和现代超标量处理器的循环优化中。它的核心思想是：让循环的<strong>不同迭代重叠执行</strong>。</p>
+
+        <p>考虑一个简单的循环体，其中包含 3 个操作：加载、计算、存储。在传统的标量执行中，每个迭代依次执行：</p>
+
+        <pre><code>// 传统的迭代执行顺序（无重叠）
+Iter 0: [load] [compute] [store]
+Iter 1:              [load] [compute] [store]
+Iter 2:                           [load] [compute] [store]
+// 有大量空闲周期——功能单元没有被充分利用！</code></pre>
+
+        <p>软件流水线重新组织迭代中的指令，让它们按如下方式重叠：</p>
+
+        <pre><code>// 软件流水线后的执行顺序
+Iter 0: [load]                      ← prologue（启动阶段）
+Iter 0:         [compute]
+Iter 1:         [load]              ← kernel（核心阶段，所有阶段都活跃）
+Iter 0:                   [store]
+Iter 1:                   [compute]
+Iter 2:                   [load]
+Iter 1:                             [store]  ← epilogue（收尾阶段）
+Iter 2:                             [compute]
+Iter 2:                                       [store]</code></pre>
+
+        <p>软件流水线将一个循环的执行分为三个区域：</p>
+
+        <ul>
+            <li><strong>Prologue（启动阶段）</strong>：迭代开始启动，功能单元逐步填满。此时只有部分迭代的部分指令在执行。</li>
+            <li><strong>Kernel（核心阶段）</strong>：所有级数的流水线都满负荷运行。每个周期都能完成一个迭代的结果——这是吞吐量的最优点。</li>
+            <li><strong>Epilogue（收尾阶段）</strong>：迭代结束，流水线逐步排空。</li>
+        </ul>
+
+        <h3>模调度（Modulo Scheduling）</h3>
+
+        <p>模调度是实现软件流水线的经典算法。它试图找到循环的一个<strong>启动间隔（Initiation Interval, II）</strong>——即连续两个迭代启动之间的周期数。II 越短，并行度越高。但 II 受到两种约束的下界限制：</p>
+
+        <ul>
+            <li><strong>RecMII（Recurrence-constrained II）</strong>：由循环携带依赖的延迟决定。例如 <code>a[i] = a[i-1] + 1</code> 的依赖链必须等待前一次迭代的加法完成，这限制了 II 的最小值。</li>
+            <li><strong>ResMII（Resource-constrained II）</strong>：由功能单元的数量决定。如果 CPU 只有 2 个加载单元，而每个迭代需要 3 次加载，那么无论怎么调度，II 至少需要 2 个周期。</li>
+        </ul>
+
+        <p>实际的 II = max(RecMII, ResMII)。模调度算法从一个下限开始，逐步增加 II，直到找到一个合法的调度方案为止。</p>
+
+        <div class="highlight">
+            <strong>深度观察：</strong>软件流水线在 DSP（数字信号处理器）和 GPU 编译器中尤其重要。TI 的 C6000 系列 DSP 编译器以 aggressive 的软件流水线闻名——它甚至会在 prologue 阶段插入"投机执行"的指令，在 epilogue 阶段用谓词（predication）来防止越界访问。ITANIUM 架构的 Intel 编译器更是将软件流水线发挥到了极致，配合 IA-64 架构的显式并行指令（EPIC）设计，达到了极高的指令级并行度。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们深入探讨了编译器高级优化技术的三个核心领域。首先是 <strong>SIMD 向量化</strong>——编译器通过数据级并行，将循环中的标量操作自动转换为向量指令，我们学习了合法性检查的两个关键条件（无依赖、连续访问）。然后是<strong>循环变换技术</strong>——循环交换改善数据局部性，循环融合与分布相互配合，循环展开平衡并行度与代码体积。通过矩阵乘法的深度案例，我们看到了循环顺序如何产生数量级的性能差异。最后是<strong>软件流水线</strong>——通过 prologue/kernel/epilogue 三段结构让循环迭代重叠执行，以及模调度算法的核心思想。</p>
+
+        <p>这些高级优化技术已经触及了现代编译器的"核心能力区"。但在传统的"编译→执行"模式之外，还有一种截然不同的编译器设计思想正在深刻改变着动态语言的执行效率——那就是即时编译（JIT）。下一章，我们将进入 JIT 的世界，看看 LLVM ORC JIT、V8 TurboFan Tracing JIT 和分层编译的精彩设计，敬请期待。</p>
+
+        <div class="footer-nav">
+            <a href="19.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="21.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>
