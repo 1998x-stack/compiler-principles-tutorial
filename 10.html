@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第10章 语义分析</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html" class="active">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第10章 语义分析</h2>
+
+        <p>大家好，我是你们的讲师。到目前为止，我们完成的工作可以用一句话概括：把源代码解析成了一棵树。词法分析和语法分析确保了程序的"语法"是正确的——括号匹配、分号到位、表达式符合文法。但是，语法正确不代表程序就有意义。</p>
+
+        <p>比如说，下面这段代码在 C 语言中语法上完全合法：</p>
+
+        <pre><code>int main() {
+    int x = "hello" - 42;
+    y = x * 3.14;
+    return z;
+}</code></pre>
+
+        <p>语法分析器会欣然接受这段代码——因为它确实满足 C 语言的文法规则。但是任何 C 编译器都会报出一堆错误：<code>"hello"</code> 是字符串不能减整数、<code>y</code> 未声明、<code>z</code> 未声明。这些错误就是<strong>语义错误</strong>——你的代码虽然"语法通顺"，但"逻辑不通"。语义分析阶段的任务，就是揪出这些语法检查无法发现的深层问题。</p>
+
+        <div class="highlight">
+            <strong>一句话定义：</strong>语义分析 = 在 AST 上检查程序是否满足语言的<strong>静态语义规则</strong>。它确保每个变量在使用前被声明过、每个操作的操作数类型是相容的、每个函数调用有正确数量和类型的参数。如果说语法分析检查的是"形式"，那么语义分析检查的就是"内涵"。
+        </div>
+
+        <h2>符号表的构造与查找</h2>
+
+        <p>语义分析的核心基础设施是<strong>符号表（Symbol Table）</strong>。符号表本质上是一个字典（键值对集合），将名字（变量名、函数名、类名等）映射到它们的属性信息（类型、作用域、存储位置等）。</p>
+
+        <h3>符号表的基本操作</h3>
+
+        <pre><code>// 符号表条目 —— 每个声明对应一个条目
+class Symbol {
+    String name;        // 变量名
+    Type type;          // 变量类型
+    int scopeLevel;     // 所在作用域层级
+    boolean isMutable;  // 是否可修改 (const/val vs var/let)
+    SourceLocation location;  // 声明位置（用于错误报告）
+}
+
+// 符号表 —— 包装一个 HashMap
+class SymbolTable {
+    private Map&lt;String, Symbol&gt; symbols = new HashMap&lt;&gt;();
+
+    // 插入：在当前作用域声明一个新符号
+    public void insert(Symbol sym) {
+        if (symbols.containsKey(sym.name)) {
+            throw new SemanticError(
+                sym.location,
+                "重复声明: '" + sym.name + "' 在当前作用域中已经定义"
+            );
+        }
+        symbols.put(sym.name, sym);
+    }
+
+    // 查找：在当前作用域查找符号
+    public Symbol lookup(String name) {
+        return symbols.get(name);
+    }
+
+    // 判断符号是否存在于当前作用域
+    public boolean containsName(String name) {
+        return symbols.containsKey(name);
+    }
+}</code></pre>
+
+        <h3>作用域栈（Scope Stack）</h3>
+        <p>真实语言有嵌套作用域（函数内嵌代码块、if 分支、循环体等）。为了处理嵌套，我们需要一个<strong>作用域栈</strong>——进入新作用域时 push 一个新表，退出时 pop：</p>
+
+        <pre><code>class ScopeStack {
+    private List&lt;SymbolTable&gt; scopes = new ArrayList&lt;&gt;();
+
+    // 进入新作用域
+    public void enterScope() {
+        scopes.add(new SymbolTable());
+    }
+
+    // 退出当前作用域
+    public void exitScope() {
+        scopes.remove(scopes.size() - 1);
+    }
+
+    // 在当前作用域插入符号
+    public void insert(Symbol sym) {
+        currentTable().insert(sym);
+    }
+
+    // 在所有作用域中查找（从内到外）
+    public Symbol lookup(String name) {
+        for (int i = scopes.size() - 1; i >= 0; i--) {
+            Symbol sym = scopes.get(i).lookup(name);
+            if (sym != null) return sym;
+        }
+        return null; // 未找到
+    }
+
+    private SymbolTable currentTable() {
+        return scopes.get(scopes.size() - 1);
+    }
+}</code></pre>
+
+        <div class="tip">
+            <strong>重要细节：</strong>注意 <code>lookup</code> 方法的遍历顺序——从<strong>最内层</strong>（栈顶）到<strong>最外层</strong>（栈底）。这实现了"内部作用域优先"的查找语义。当你在函数内部声明了一个与外层同名的变量时，内层声明会<strong>遮蔽（shadow）</strong>外层声明，这正是通过这个从内到外的查找顺序实现的。
+        </div>
+
+        <h2>类型系统与类型检查</h2>
+
+        <p>类型系统是语义分析中最核心的组成部分。每种编程语言都有自己独特的类型规则，但有些基本原理是共通的。</p>
+
+        <h3>静态类型 vs 动态类型</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>特性</th>
+                    <th>静态类型</th>
+                    <th>动态类型</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>检查时机</td>
+                    <td>编译时（编译期报错）</td>
+                    <td>运行时（运行期报错）</td>
+                </tr>
+                <tr>
+                    <td>性能</td>
+                    <td>无需运行时类型检查，性能更优</td>
+                    <td>运行时类型检查有开销</td>
+                </tr>
+                <tr>
+                    <td>灵活性</td>
+                    <td>较低，类型约束严格</td>
+                    <td>较高，适合快速原型开发</td>
+                </tr>
+                <tr>
+                    <td>典型语言</td>
+                    <td>C、Java、Rust、TypeScript</td>
+                    <td>Python、JavaScript、Ruby</td>
+                </tr>
+                <tr>
+                    <td>错误发现</td>
+                    <td>开发阶段就能发现类型错误</td>
+                    <td>可能上线后才暴露</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>类型检查的实现</h3>
+        <p>类型检查器通常实现为一个 AST Visitor，遍历每个表达式和语句，检查类型的相容性：</p>
+
+        <pre><code>class TypeChecker implements ASTVisitor&lt;Type&gt; {
+    private ScopeStack scopeStack;
+    private TypeEnvironment typeEnv;
+
+    @Override
+    public Type visitBinaryExpr(BinaryExpr node) {
+        Type leftType = node.left.accept(this);
+        Type rightType = node.right.accept(this);
+
+        String op = node.operator;
+
+        // 检查算术运算符的类型
+        if (isArithmeticOp(op)) {
+            if (!isNumericType(leftType)) {
+                reportError(node.left.location,
+                    "算术运算符的左操作数必须是数值类型，但得到: " + leftType);
+            }
+            if (!isNumericType(rightType)) {
+                reportError(node.right.location,
+                    "算术运算符的右操作数必须是数值类型，但得到: " + rightType);
+            }
+            // 结果类型：如果有 float 则结果为 float，否则为 int
+            return unifyNumericTypes(leftType, rightType);
+        }
+
+        // 检查关系运算符的类型（==, !=, &lt;, &gt; 等）
+        if (isRelationalOp(op)) {
+            if (!leftType.equals(rightType)) {
+                reportError(node.location,
+                    "关系运算符两边类型必须相同: " + leftType + " vs " + rightType);
+            }
+            return Type.BOOL;  // 关系运算返回布尔值
+        }
+
+        reportError(node.location, "未知运算符: " + op);
+        return Type.ERROR;  // 返回 ERROR 类型，避免级联报错
+    }
+
+    @Override
+    public Type visitVarDeclStmt(VarDeclStmt node) {
+        // 变量声明：检查初始值类型是否与声明类型匹配
+        if (node.initializer != null) {
+            Type initType = node.initializer.accept(this);
+            if (!isAssignable(node.type, initType)) {
+                reportError(node.location,
+                    "无法将 '" + initType + "' 类型的值赋给 '" + node.type + "' 类型的变量");
+            }
+        }
+        // 将变量加入符号表
+        Symbol sym = new Symbol(node.name, node.type, ...);
+        scopeStack.insert(sym);
+        return null;
+    }
+
+    // ... 其他节点类型的检查
+}</code></pre>
+
+        <div class="warning">
+            <strong>注意级联错误：</strong>当类型检查器发现一个错误后，它应该尽可能地<strong>继续检查</strong>而不是立即终止。在上面的代码中，当发现类型不匹配时，我们报告错误但仍然继续，并返回一个特殊的 <code>Type.ERROR</code> 标记。这个标记的作用是防止后续基于这个结果再次报错——一旦某个表达式已经是 ERROR 类型，依赖它的表达式就不应该再重复报告类型不匹配。否则，因为一个变量未声明，可能会级联出现几十个"类型不匹配"的报错，淹没有用的信息。
+        </div>
+
+        <h3>类型推导基础</h3>
+        <p>一些语言（如 Rust、Haskell、Kotlin）支持<strong>类型推导</strong>——编译器能自动推断表达式的类型，而不需要程序员显式标注。类型推导的核心算法是 Hindley-Milner 算法，它通过<strong>约束求解</strong>来推断类型：</p>
+
+        <pre><code>// 类型推导的简化版本
+// 编译器在看到 "let x = 42" 时，推导出 x 的类型为 int
+// 在看到 "let y = x + 1" 时，推导出 y 的类型也为 int
+
+// 约束生成阶段：
+// 1. 看到 "42" -> 生成约束: typeof(42) = int
+// 2. 看到 "x + 1" -> 生成约束: typeof(x) = typeof(1) = int
+//                    并且 typeof(x+1) = int
+// 3. 看到 "y = x + 1" -> 生成约束: typeof(y) = typeof(x+1) = int
+
+// 约束求解阶段：
+// 将以上约束统一求解，得到 x: int, y: int</code></pre>
+
+        <h2>作用域与名字解析</h2>
+
+        <p>作用域规则决定了名字在程序的哪些部分可见。不同语言有不同作用域规则，但大多数遵循以下几个基本原则。</p>
+
+        <h3>嵌套作用域与 Shadow 规则</h3>
+
+        <pre><code>int x = 10;            // 全局作用域: x = int
+
+void foo() {
+    int x = 20;        // 函数作用域: shadow (遮蔽) 了全局 x
+                       // 在此函数内，x 引用的是局部变量 x = 20
+
+    if (true) {
+        int x = 30;    // 块作用域: 再次 shadow 函数内的 x
+        System.out.println(x);  // 输出 30
+    }
+
+    System.out.println(x);  // 输出 20 (退出 if 作用域, x 恢复为函数内的 x)
+}
+
+System.out.println(x);  // 输出 10 (在函数外, x 恢复为全局 x)</code></pre>
+
+        <p>在语义分析时，我们逐层扫描 AST。每进入一个带有新作用域的节点（函数体、代码块），就 push 一个新的符号表；每离开这样一个节点，就 pop 这个符号表。所有名字引用都通过 <code>scopeStack.lookup()</code> 来解析——从内到外逐层查找。</p>
+
+        <h3>函数作用域</h3>
+        <p>函数作用域的处理稍显特殊，因为函数可以先声明后使用、甚至可以互相递归调用。为此，编译器通常采用<strong>两遍处理</strong>的策略：</p>
+        <ul>
+            <li><strong>第一遍：</strong>扫描所有顶层声明（函数、全局变量），将它们填入符号表，但不处理函数体。这样当处理任何函数体时，所有其他函数的声明都已经在符号表中了。</li>
+            <li><strong>第二遍：</strong>逐个进入函数体，进行类型检查和语义验证。此时所有函数签名都已就绪，互相调用可以正常解析。</li>
+        </ul>
+
+        <h2>常见语义错误</h2>
+
+        <p>在真正的编译器工程中，语义错误的种类远比我们想象的丰富。以下是编译器中最常见的几类语义错误：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>错误类别</th>
+                    <th>示例</th>
+                    <th>说明</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>未声明变量</td>
+                    <td><code>print(x);</code> 但 x 未定义</td>
+                    <td>最常见的语义错误，通常由拼写错误引起</td>
+                </tr>
+                <tr>
+                    <td>类型不匹配</td>
+                    <td><code>int x = "hello";</code></td>
+                    <td>赋值或运算时类型不相容</td>
+                </tr>
+                <tr>
+                    <td>重复声明</td>
+                    <td>同一作用域内两次声明同名变量</td>
+                    <td>多数语言禁止在同一作用域重复声明</td>
+                </tr>
+                <tr>
+                    <td>函数参数错误</td>
+                    <td>调用函数时参数个数或类型不匹配</td>
+                    <td>重载解析失败或参数数量不对</td>
+                </tr>
+                <tr>
+                    <td>返回值类型不匹配</td>
+                    <td>函数声明返回 int 但返回了字符串</td>
+                    <td>return 语句的类型与函数签名不一致</td>
+                </tr>
+                <tr>
+                    <td>不可访问</td>
+                    <td>访问 private 成员、在静态方法中使用 this</td>
+                    <td>访问控制权限检查</td>
+                </tr>
+                <tr>
+                    <td>break/continue 位置错误</td>
+                    <td>在循环外使用 break</td>
+                    <td>控制流结构使用不当</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="highlight">
+            <strong>工程要点：</strong>高质量的语义错误报告需要做到三点。第一是<strong>精确定位</strong>：明确指出错误发生在哪一行哪一列。第二是<strong>清晰描述</strong>：不仅说"类型错误"，还要说"期望 int 但得到 String"。第三是<strong>减少迷惑</strong>：避免级联错误和重复报告。一个好的经验法则是：让每个程序错误最多只产生一条错误消息。这要求编译器在发现一个错误后，能巧妙地"恢复"并继续检查，而不会对同一个错误反复报错。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们深入探讨了语义分析阶段的核心机制：符号表（作用域栈的 push/pop 管理）、类型系统（静态类型 vs 动态类型）、类型检查（AST Visitor 实现类型相容性验证）、以及常见语义错误的类别与处理。语义分析是编译器从"理解结构"到"理解含义"的关键转折点——经过语义分析之后，编译器已经对程序的每个元素都有了深入的了解。</p>
+
+        <p>有了语义分析的结果（类型标注过的 AST + 完整的符号表），编译器的下一步就是生成<strong>中间表示（IR）</strong>。在下一章中，我们将学习三地址码、SSA 形式、以及控制流图——这些是现代编译器优化的基石。敬请期待。</p>
+
+        <div class="footer-nav">
+            <a href="09.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="11.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

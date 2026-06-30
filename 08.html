@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第8章 ANTLR4实战</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html" class="active">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第8章 ANTLR4实战</h2>
+
+        <p>大家好，我是你们的讲师。我们花了四章的篇幅，深入讨论了词法分析和语法分析的理论——从正则表达式到上下文无关文法，从LL(1)到LALR(1)。我知道，有些同学可能已经被这些理论搞得有些头大了。好消息是，今天我们要做一件让人兴奋的事情：把这些理论用到实际工作中去。</p>
+
+        <p>在真实的编译器项目中，很少有人会从零手写词法分析和语法分析的代码——那样做不仅效率低下，而且容易出错。相反，工业界的标准做法是使用<strong>解析器生成器（Parser Generator）</strong>。你只需定义语言的文法规则，工具就能自动生成完整的词法分析器和语法分析器。而今天我们要介绍的 ANTLR4，正是这类工具中的佼佼者。</p>
+
+        <div class="highlight">
+            <strong>为什么选择 ANTLR4？</strong>ANTLR4 使用 LL(*) 算法，比传统的 LL(k) 强大得多——它不需要你手动消除左递归或提取左公因子，支持直接编写接近自然语法的文法规则。此外，ANTLR4 能生成多种目标语言（Java、Python、JavaScript、Go、C++、C# 等），并且内置了强大的 Visitor 和 Listener 模式支持，让你能轻松遍历解析树。它是 GitHub 上最流行的解析器生成器之一，被广泛应用于 Hive、Spark SQL、Presto 等知名项目中。
+        </div>
+
+        <h2>ANTLR4 安装与配置</h2>
+
+        <p>在开始使用 ANTLR4 之前，我们需要先搭建好开发环境。ANTLR4 本身是用 Java 编写的，但它可以生成多种语言的代码，所以我们需要安装 Java 运行时，以及你希望使用的目标语言运行时。</p>
+
+        <h3>安装 Java 运行时</h3>
+        <p>ANTLR4 的工具本体（用于从文法生成解析器代码）需要 Java 环境。确保你的系统安装了 JDK 8 或更高版本：</p>
+
+        <pre><code># 检查 Java 版本
+java -version
+
+# 下载 ANTLR4 完整 jar 包 (当前最新稳定版为 4.13.x)
+curl -O https://www.antlr.org/download/antlr-4.13.1-complete.jar
+
+# 设置别名方便使用
+alias antlr4='java -jar /path/to/antlr-4.13.1-complete.jar'
+alias grun='java org.antlr.v4.gui.TestRig'</code></pre>
+
+        <h3>Python 运行时安装</h3>
+        <p>如果你希望 ANTLR4 生成 Python 解析器，需要安装 Python 运行时库：</p>
+
+        <pre><code>pip install antlr4-tools
+pip install antlr4-python3-runtime</code></pre>
+
+        <h3>IDE 插件</h3>
+        <p>ANTLR4 的语法文件（.g4 文件）编写体验，可以通过 IDE 插件大幅提升：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>IDE</th>
+                    <th>插件名称</th>
+                    <th>核心功能</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>IntelliJ IDEA</td>
+                    <td>ANTLR v4 grammar plugin</td>
+                    <td>语法高亮、文法预览、解析树可视化、语法错误实时检查</td>
+                </tr>
+                <tr>
+                    <td>VS Code</td>
+                    <td>ANTLR4 grammar syntax support</td>
+                    <td>语法高亮、自动补全、代码片段</td>
+                </tr>
+                <tr>
+                    <td>Eclipse</td>
+                    <td>ANTLR4 IDE</td>
+                    <td>完整集成开发环境、调试支持</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Maven/Gradle 集成（Java 项目）</h3>
+        <p>对于 Java 项目，推荐使用构建工具集成 ANTLR4 的代码生成阶段，使其自动化到构建流程中。Maven 配置示例如下：</p>
+
+        <pre><code>&lt;!-- pom.xml 中配置 antlr4-maven-plugin --&gt;
+&lt;build&gt;
+    &lt;plugins&gt;
+        &lt;plugin&gt;
+            &lt;groupId&gt;org.antlr&lt;/groupId&gt;
+            &lt;artifactId&gt;antlr4-maven-plugin&lt;/artifactId&gt;
+            &lt;version&gt;4.13.1&lt;/version&gt;
+            &lt;executions&gt;
+                &lt;execution&gt;
+                    &lt;goals&gt;&lt;goal&gt;antlr4&lt;/goal&gt;&lt;/goals&gt;
+                &lt;/execution&gt;
+            &lt;/executions&gt;
+        &lt;/plugin&gt;
+    &lt;/plugins&gt;
+&lt;/build&gt;</code></pre>
+
+        <p>配置好之后，运行 <code>mvn generate-sources</code> 即可自动从 src/main/antlr4/ 目录下的 .g4 文件生成解析器代码。</p>
+
+        <h2>语法文件编写</h2>
+
+        <p>ANTLR4 使用扩展名为 <code>.g4</code> 的语法文件来描述语言的文法。掌握 .g4 文件的编写是使用 ANTLR4 的核心技能。</p>
+
+        <h3>基本结构</h3>
+        <p>一个典型的 .g4 文件包含三大部分：grammar 声明、lexer 规则和 parser 规则。下面是一个计算器文法的例子：</p>
+
+        <pre><code>// Calc.g4 — 一个简单的四则运算计算器
+grammar Calc;
+
+// Parser 规则（小写开头）
+prog: stat+;
+
+stat: expr NEWLINE
+    | ID '=' expr NEWLINE
+    | NEWLINE
+    ;
+
+expr: expr ('*' | '/') expr
+    | expr ('+' | '-') expr
+    | INT
+    | ID
+    | '(' expr ')'
+    ;
+
+// Lexer 规则（大写开头）
+ID: [a-zA-Z_][a-zA-Z0-9_]*;
+INT: [0-9]+;
+NEWLINE: '\r'? '\n';
+WS: [ \t]+ -> skip;</code></pre>
+
+        <p>注意这里的关键约定：<strong>lexer 规则以大写字母开头，parser 规则以小写字母开头</strong>。这不仅仅是风格问题——ANTLR4 通过大小写来区分词法规则和语法规则，写反了会导致编译错误。</p>
+
+        <h3>Lexer 规则详解</h3>
+        <p>词法规则支持丰富的字符集表示法，包括正则表达式中的大多数常见操作：</p>
+
+        <ul>
+            <li><strong>字符范围：</strong><code>[a-z]</code>、<code>[A-Z]</code>、<code>[0-9]</code></li>
+            <li><strong>字符集合：</strong><code>[abc]</code>、<code>[^0-9]</code>（取反）</li>
+            <li><strong>重复：</strong><code>*</code>（0次以上）、<code>+</code>（1次以上）、<code>?</code>（0或1次）</li>
+            <li><strong>特殊序列：</strong><code>'if'</code>（关键字）、<code>'&&'</code>（特定符号序列）</li>
+            <li><strong>动作：</strong><code>-> skip</code>（丢弃）、<code>-> channel(HIDDEN)</code>（隐藏通道）</li>
+        </ul>
+
+        <h3>Fragment 规则</h3>
+        <p>当多个 lexer 规则共享一部分字符模式时，可以使用 <code>fragment</code> 来定义公共片段。Fragment 规则本身不会生成 token，它只被其他 lexer 规则引用：</p>
+
+        <pre><code>fragment DIGIT: [0-9];
+fragment LETTER: [a-zA-Z_];
+
+ID: LETTER (LETTER | DIGIT)*;
+INT: DIGIT+;
+
+// fragment 不会被识别为独立的 token
+// 以下规则会报错，因为 fragment 不能直接出现在语法中
+// fragment FOO: 'abc';  // 这只是一个片段</code></pre>
+
+        <div class="tip">
+            <strong>最佳实践：</strong>善于使用 fragment 可以显著减少 lexer 规则的重复。比如在 JSON 解析器中，<code>fragment ESC</code> 定义转义字符序列，然后在 STRING 规则中引用。当需要修改转义规则时，只需修改一处。
+        </div>
+
+        <h3>Parser 规则与左递归</h3>
+        <p>ANTLR4 的 LL(*) 算法<strong>直接支持左递归</strong>！这是它相对于传统 LL 解析器的重大优势。上面的 <code>expr</code> 规则中，<code>expr ('*' | '/') expr</code> 就是一个左递归的产生式，ANTLR4 能自动将其转换为等价的非左递归形式。你不需要像写 LL(1) 文法那样将表达式拆分为 expr -> term -> factor 的多层结构。</p>
+
+        <div class="warning">
+            <strong>注意：</strong>虽然 ANTLR4 支持左递归，但只有<strong>直接左递归</strong>（形如 A -> A ...）被支持。间接左递归（A -> B -> A）仍然不被支持，需要手动消除。此外，左递归规则有优先级顺序——先出现的选择拥有更高优先级，这恰好对应了运算符优先级。
+        </div>
+
+        <h2>Visitor 与 Listener 模式</h2>
+
+        <p>ANTLR4 解析源程序后，会生成一棵<strong>解析树（Parse Tree）</strong>或<strong>语法分析树（CST）</strong>。针对这棵树的遍历，ANTLR4 提供了两种设计模式：Listener 和 Visitor。</p>
+
+        <h3>Listener 模式（默认）</h3>
+        <p>Listener 采用<strong>观察者模式</strong>——ANTLR4 自动实现树的深度优先遍历，你只需在进入（enter）或退出（exit）某个语法节点时"监听"并做出响应。你无法控制遍历的顺序，因为 ANTLR4 替你管理了遍历流程。</p>
+
+        <pre><code>// 由 ANTLR4 自动生成的 Listener 基类
+public class CalcBaseListener implements CalcListener {
+    @Override public void enterProg(CalcParser.ProgContext ctx) { }
+    @Override public void exitProg(CalcParser.ProgContext ctx) { }
+    @Override public void enterExpr(CalcParser.ExprContext ctx) { }
+    @Override public void exitExpr(CalcParser.ExprContext ctx) { }
+}
+
+// 你的业务逻辑：只需要覆写感兴趣的方法
+public class CalcEvaluator extends CalcBaseListener {
+    @Override
+    public void exitExpr(CalcParser.ExprContext ctx) {
+        // 当退出 expr 节点时求值
+        if (ctx.getChildCount() == 3) {
+            int left = Integer.parseInt(ctx.getChild(0).getText());
+            String op = ctx.getChild(1).getText();
+            int right = Integer.parseInt(ctx.getChild(2).getText());
+            // ... 计算结果并存储
+        }
+    }
+}</code></pre>
+
+        <h3>Visitor 模式</h3>
+        <p>Visitor 模式给你更多的控制权——你需要<strong>显式调用 visit 方法</strong>来决定遍历哪些子节点以及遍历的顺序。更重要的是，Visitor 支持返回值传递，非常适合构建求值器或翻译器。</p>
+
+        <pre><code>// 由 ANTLR4 自动生成的 Visitor 基类
+public class CalcBaseVisitor&lt;T&gt; implements CalcVisitor&lt;T&gt; {
+    @Override public T visitProg(CalcParser.ProgContext ctx) {
+        return visitChildren(ctx);  // 默认实现
+    }
+    @Override public T visitExpr(CalcParser.ExprContext ctx) {
+        return visitChildren(ctx);
+    }
+}
+
+// 你的求值器——利用泛型返回值 T 传递计算结果
+public class CalcEvaluatorVisitor extends CalcBaseVisitor&lt;Integer&gt; {
+    @Override
+    public Integer visitExpr(CalcParser.ExprContext ctx) {
+        if (ctx.getChildCount() == 1) {
+            // 叶子节点：数字或变量
+            return Integer.parseInt(ctx.INT().getText());
+        }
+        if (ctx.getChildCount() == 3) {
+            Integer left = visit(ctx.getChild(0));   // 递归计算左操作数
+            Integer right = visit(ctx.getChild(2));  // 递归计算右操作数
+            String op = ctx.getChild(1).getText();
+            switch (op) {
+                case "+": return left + right;
+                case "-": return left - right;
+                case "*": return left * right;
+                case "/": return left / right;
+            }
+        }
+        return 0;
+    }
+}</code></pre>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>特性</th>
+                    <th>Listener</th>
+                    <th>Visitor</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>遍历控制</td>
+                    <td>自动深度优先，不可干预</td>
+                    <td>完全手动控制遍历顺序</td>
+                </tr>
+                <tr>
+                    <td>返回值传递</td>
+                    <td>不支持（需要额外数据结构）</td>
+                    <td>支持泛型返回值 T</td>
+                </tr>
+                <tr>
+                    <td>适用场景</td>
+                    <td>简单分析、代码检查、统计</td>
+                    <td>求值、翻译、代码生成</td>
+                </tr>
+                <tr>
+                    <td>代码量</td>
+                    <td>较少，只需覆写感兴趣的方法</td>
+                    <td>较多，需要显式调用 visit</td>
+                </tr>
+                <tr>
+                    <td>灵活性</td>
+                    <td>较低</td>
+                    <td>较高</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>ANTLR4 的错误恢复策略</h2>
+
+        <p>解析器在实际使用中几乎一定会遇到非法输入——用户会写出各种不合语法的代码。如何优雅地报告错误并<strong>继续解析</strong>（而不是抛出异常直接崩溃），是衡量一个解析器是否工程可用的关键指标。</p>
+
+        <h3>默认错误恢复：单Token插入/删除</h3>
+        <p>ANTLR4 的默认错误恢复策略是<strong>自适应的</strong>。当遇到一个无法匹配的 token 时，解析器会尝试两种操作：</p>
+
+        <ul>
+            <li><strong>单Token删除：</strong>跳过当前 token，继续用下一个 token 匹配当前规则。如果后续解析能顺利进行，就跳过这个"多余"的 token。</li>
+            <li><strong>单Token插入：</strong>在当前位置"虚拟地"插入一个期望的 token，然后继续解析。如果这样能让解析继续，就假设缺少了这个 token。</li>
+        </ul>
+
+        <p>ANTLR4 会在运行时动态评估这两种策略哪个能让解析走得更远，然后选择更优的那个。这比传统 LL 解析器简单的"panic mode"（跳过直到同步 token）要智能得多。</p>
+
+        <h3>自定义错误处理</h3>
+        <p>你可以通过实现 <code>ANTLRErrorStrategy</code> 接口来自定义错误处理逻辑：</p>
+
+        <pre><code>// 使用默认策略的改进版 — 自定义错误监听器
+public class CalcErrorListener extends BaseErrorListener {
+    private final List&lt;String&gt; errors = new ArrayList&lt;&gt;();
+
+    @Override
+    public void syntaxError(Recognizer&lt;?, ?&gt; recognizer,
+                            Object offendingSymbol,
+                            int line, int charPositionInLine,
+                            String msg, RecognitionException e) {
+        String error = String.format("第 %d 行，第 %d 列: %s", line, charPositionInLine, msg);
+        errors.add(error);
+        // 这里可以决定是否抛出异常——如果不抛，ANTLR4 会自动尝试恢复
+    }
+
+    public boolean hasErrors() { return !errors.isEmpty(); }
+
+    public List&lt;String&gt; getErrors() { return errors; }
+}
+
+// 使用自定义错误监听器
+CharStream input = CharStreams.fromString("1 + * 2");
+CalcLexer lexer = new CalcLexer(input);
+CommonTokenStream tokens = new CommonTokenStream(lexer);
+CalcParser parser = new CalcParser(tokens);
+
+parser.removeErrorListeners();                   // 移除默认 Console 输出
+parser.addErrorListener(new CalcErrorListener()); // 注册自定义监听器
+
+ParseTree tree = parser.prog();  // 即便有错误，解析也能继续</code></pre>
+
+        <div class="warning">
+            <strong>关键理解：</strong>编译器的错误报告质量直接影响用户体验。一个优秀的错误信息应该包含：错误发生的<strong>精确位置</strong>（行号+列号）、对错误的<strong>清晰描述</strong>（不仅说"语法错误"，还要说"期望 ')' 但得到了 '}'"）、以及可能的<strong>修正建议</strong>。ANTLR4 的默认错误信息已经做得不错，但生产级编译器通常需要自定义错误策略来实现更友好的用户体验。
+        </div>
+
+        <h2>实战：用 ANTLR4 实现 JSON 解析器</h2>
+
+        <p>让我们把以上知识综合起来，用 ANTLR4 实现一个简易的 JSON 解析器。这既是 ANTLR4 语法的实战练习，也展示了一个完整解析器的开发流程。</p>
+
+        <p>首先定义 JSON 文法（JSON.g4）：</p>
+
+        <pre><code>grammar JSON;
+
+json: value EOF;
+
+value: STRING
+    | NUMBER
+    | 'true'
+    | 'false'
+    | 'null'
+    | object
+    | array
+    ;
+
+object: '{' pair (',' pair)* '}' | '{' '}';
+pair: STRING ':' value;
+
+array: '[' value (',' value)* ']' | '[' ']';
+
+STRING: '"' (ESC | ~["\\])* '"';
+fragment ESC: '\\' (["\\/bfnrt] | UNICODE);
+fragment UNICODE: 'u' HEX HEX HEX HEX;
+fragment HEX: [0-9a-fA-F];
+
+NUMBER: '-'? INT ('.' [0-9]+)? EXP?;
+fragment INT: '0' | [1-9][0-9]*;
+fragment EXP: [Ee] [+\-]? [0-9]+;
+
+WS: [ \t\n\r]+ -> skip;</code></pre>
+
+        <p>然后通过 ANTLR4 生成解析器代码，再编写 Visitor 将解析树转换为 Python 原生数据结构。这样不到 100 行文法 + 几十行 Visitor 代码，我们就得到了一个功能完整的 JSON 解析器。</p>
+
+        <div class="highlight">
+            <strong>工程价值：</strong>JSON 只是一个开始。同样的方法，你可以快速实现 YAML 子集解析器、SQL 解析器、配置文件解析器、甚至是一门完整的领域特定语言（DSL）。ANTLR4 将这些看似"大工程"的任务简化为"编写文法 + 实现 Visitor"两个步骤，这正是解析器生成器的价值所在。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>在本章中，我们从实践角度出发，学习了 ANTLR4 的安装配置、语法文件编写规范、Visitor 与 Listener 模式的选择、以及错误恢复策略。ANTLR4 将编译原理中的词法分析和语法分析理论封装为一个强大易用的工具——你只需要专注于文法设计，剩下的代码生成工作全交给它完成。</p>
+
+        <p>掌握了 ANTLR4，你就拥有了一把自己打造 DSL 和其他语言处理工具的利器。但解析树（CST）还不是编译器的终点——下一章，我们将深入探讨编译器内部更为核心的数据结构：<strong>抽象语法树（AST）</strong>，看看如何将扁平的解析树转化为更紧凑、更易于分析的 AST，并实现高效的遍历算法。敬请期待。</p>
+
+        <div class="footer-nav">
+            <a href="07.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="09.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

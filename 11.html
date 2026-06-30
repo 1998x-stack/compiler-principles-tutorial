@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第11章 中间表示(IR)</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html" class="active">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第11章 中间表示(IR)</h2>
+
+        <p>大家好，我是你们的讲师。在前面的章节中，我们走完了编译器"前端"的全部旅程：源代码经过词法分析、语法分析、语义分析，变成了一个带类型标注且通过语义验证的 AST。现在的问题是：接下来怎么才能把这个 AST"翻译"成机器能运行的代码？</p>
+
+        <p>如果我们直接针对 x86-64 架构生成代码，那么当我们需要支持 ARM 架构时，就要重新写整个代码生成器。如果我们直接生成优化过的代码，那么每种优化都要跟目标架构绑死。历史告诉我们："一次编写，到处重写"是极其糟糕的工程实践。编译器的设计师们很早就意识到，需要在前端和后端之间插入一个<strong>中间表示（Intermediate Representation, IR）</strong>——一个独立于源语言和目标机器的程序表示形式。</p>
+
+        <div class="highlight">
+            <strong>IR 的价值：</strong>IR 将编译器解耦为三个独立的模块：前端（源语言 → IR）、优化器（IR → 优化后的 IR）、后端（IR → 目标机器码）。这意味着支持一门新语言只需要写一个前端，支持一个新架构只需要写一个后端，而优化器可以被所有前端和后端共享。这就是 GCC 支持 7+ 种前端语言和 50+ 种目标架构的秘密，也是 LLVM 生态成功的核心设计理念。
+        </div>
+
+        <h2>中间表示的作用</h2>
+
+        <p>IR 的设计目标是"站在前端和后端之间"，具体来说它需要满足以下几个需求：</p>
+
+        <ul>
+            <li><strong>与源语言无关：</strong>无论是 C、Rust 还是 Kotlin，编译到同一个 IR 后都可以使用同一套优化器和后端。这意味着 IR 不能保留源语言的特定语义特征（如 C 的指针算术、Java 的异常处理）。</li>
+            <li><strong>与目标机器无关：</strong>IR 不应该暴露特定架构的寄存器数量、指令集特性或调用约定。这样同一个 IR 可以被编译到 x86、ARM、RISC-V 等不同平台。</li>
+            <li><strong>易于优化：</strong>IR 应该使常见的优化（常量折叠、死代码消除、循环优化）易于实现。如果 IR 太"高级"，优化器需要做很多解构工作；如果 IR 太"低级"，优化器又丢失了高层语义信息。</li>
+            <li><strong>易于生成代码：</strong>后端应该能从 IR 相对直接地映射到目标指令。如果 IR 过于抽象，指令选择会变得非常复杂。</li>
+        </ul>
+
+        <p>历史上出现过许多种 IR 设计，从高级的 AST 本身（有些编译器直接在 AST 上做优化），到各种图形化 IR（如程序依赖图 PDG），再到今天最主流的两类：<strong>三地址码</strong>和<strong>静态单赋值形式（SSA）</strong>。</p>
+
+        <h2>三地址码（TAC）</h2>
+
+        <p><strong>三地址码（Three-Address Code, TAC）</strong>是最经典的 IR 形式之一。顾名思义，每条指令最多涉及三个地址（两个操作数和一个结果）：</p>
+
+        <pre><code>result = operand1 operator operand2</code></pre>
+
+        <p>这里的"地址"可以是变量名、常量、编译器生成的临时变量。三地址码之所以经典，是因为它<strong>将复杂的表达式拆解为一系列简单的原子操作</strong>，每个操作只做一件简单的事——这极大地方便了后续的优化和代码生成。</p>
+
+        <h3>从 AST 到三地址码</h3>
+        <p>让我们看一个例子。下面这段源代码：</p>
+
+        <pre><code>int a = 5;
+int b = 10;
+int c = (a + b) * 2 - a;</code></pre>
+
+        <p>会被编译成以下三地址码序列：</p>
+
+        <pre><code>t1 = 5           // 常量 5 赋给临时变量 t1
+a = t1           // a = 5
+t2 = 10          // 常量 10 赋给临时变量 t2
+b = t2           // b = 10
+t3 = a + b       // 计算 a + b，结果存入 t3
+t4 = t3 * 2      // 计算 t3 * 2，结果存入 t4
+t5 = t4 - a      // 计算 t4 - a，结果存入 t5
+c = t5           // c = 最终结果</code></pre>
+
+        <p>注意我们引入了临时变量 t1, t2, t3, t4, t5。这些变量由编译器自动生成，用于保存中间计算结果。源语言中的复杂表达式 <code>(a + b) * 2 - a</code> 被分解为 3 条简单的三地址指令，每条指令只包含一个运算。这种形式不仅便于优化（可以独立分析每条指令），也便于生成汇编代码（每条三地址指令大致对应 1-2 条汇编指令）。</p>
+
+        <h3>常见指令类型</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>指令类型</th>
+                    <th>格式</th>
+                    <th>示例</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>赋值</td>
+                    <td>x = y</td>
+                    <td><code>a = b</code></td>
+                </tr>
+                <tr>
+                    <td>二元运算</td>
+                    <td>x = y op z</td>
+                    <td><code>t1 = a + b</code></td>
+                </tr>
+                <tr>
+                    <td>一元运算</td>
+                    <td>x = op y</td>
+                    <td><code>t2 = -t1</code></td>
+                </tr>
+                <tr>
+                    <td>拷贝赋值</td>
+                    <td>x = y</td>
+                    <td><code>c = t5</code></td>
+                </tr>
+                <tr>
+                    <td>无条件跳转</td>
+                    <td>goto L</td>
+                    <td><code>goto L1</code></td>
+                </tr>
+                <tr>
+                    <td>条件跳转</td>
+                    <td>if x relop y goto L</td>
+                    <td><code>if a &lt; b goto L2</code></td>
+                </tr>
+                <tr>
+                    <td>函数调用</td>
+                    <td>call f, args</td>
+                    <td><code>t3 = call foo(a, b)</code></td>
+                </tr>
+                <tr>
+                    <td>函数返回</td>
+                    <td>return x</td>
+                    <td><code>return t3</code></td>
+                </tr>
+                <tr>
+                    <td>数组访问</td>
+                    <td>x = y[i]</td>
+                    <td><code>t4 = arr[t5]</code></td>
+                </tr>
+                <tr>
+                    <td>指针操作</td>
+                    <td>x = *y, *x = y</td>
+                    <td><code>t6 = *ptr</code></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>静态单赋值形式（SSA）</h2>
+
+        <p>三地址码虽然好用，但有一个根本性的缺陷：它不便于数据流分析。考虑以下代码：</p>
+
+        <pre><code>x = 1
+x = x + 1
+y = x * 2</code></pre>
+
+        <p>问题来了：<code>y = x * 2</code> 中的 <code>x</code> 引用的是哪个 <code>x</code>？是初始值 1，还是加 1 后的 2？人眼能看出来是第二个，但从编译器分析的角度，我们需要做<strong>到达定值（reaching definition）</strong>分析才能确定。而如果变量可以被多次赋值，这种分析会变得相当复杂。</p>
+
+        <p><strong>静态单赋值形式（Static Single Assignment, SSA）</strong>正是为了解决这个问题而设计的。SSA 的核心规则简单而优雅：<strong>每个变量只被赋值一次</strong>，并且每个变量在被赋值之前必须唯一定义。</p>
+
+        <h3>Phi 函数</h3>
+        <p>如果每个变量只能赋值一次，那如何处理程序中的分支呢？比如：</p>
+
+        <pre><code>if (condition)
+    x = 1
+else
+    x = 2
+y = x</code></pre>
+
+        <p>在 if-else 分支中，x 在两个不同的地方被赋值。合并之后，y 的取值取决于走的是哪个分支。SSA 用 <code>phi（φ）函数</code> 来解决这个难题：</p>
+
+        <pre><code>// 转换为 SSA 形式后的代码
+if (condition)
+    x1 = 1
+else
+    x2 = 2
+x3 = phi(x1, x2)   // x3 的值: 如果从 then 分支来则为 x1，否则为 x2
+y1 = x3</code></pre>
+
+        <p>phi 函数是一个"虚构"的指令——它不执行任何计算，只是告诉编译器："这个变量的值取决于控制流从哪里来"。如果代码是从 then 分支执行到这个合并点的，x3 就等于 x1；如果是从 else 分支来的，x3 就等于 x2。</p>
+
+        <div class="tip">
+            <strong>理解 phi 函数：</strong>很多初学者会觉得 phi 函数很神秘。实际上，你可以把 phi 理解为编译器插入在控制流汇合点的一个"选择器"——它根据前驱基本块的不同，选择不同的值。在最终生成机器码时，phi 函数会被解析为实际的选择逻辑（通常在寄存器分配阶段实现为 move 指令）。phi 函数不是真实 CPU 能执行的指令，它是为了方便编译器的数据流分析而存在的抽象。
+        </div>
+
+        <h3>支配边界与 Phi 函数插入</h3>
+        <p>SSA 构造中最关键的问题是：在哪些位置需要插入 phi 函数？答案是由<strong>支配边界（Dominance Frontier）</strong>决定的。不严谨地说，如果一个变量在某个基本块 B 中定义，那么在所有被 B 支配（dominate）的基本块中都不需要 phi 函数——因为只要到达这些基本块，必然经过了 B，所以变量的定义是唯一确定的。但在 B 的支配边界（B 支配结束的地方），可能有来自不同路径的代码汇合，此时就需要插入 phi 函数。</p>
+
+        <p>SSA 的构造分为两步：</p>
+        <ol>
+            <li><strong>插入 phi 函数：</strong>在需要的地方插入 phi 指令。算法会遍历所有变量的定义点，然后在它们的支配边界处插入 phi 函数。</li>
+            <li><strong>变量重命名：</strong>为每个变量添加版本号（x1, x2, x3...）。当经过 phi 函数时，使用新的版本号；当引用变量时，使用当前最新的版本号。</li>
+        </ol>
+
+        <div class="warning">
+            <strong>理解支配性：</strong>基本块 A <strong>支配</strong>基本块 B，当且仅当从控制流入口到 B 的所有路径都必须经过 A。如果你把控制流图画成一个有向图，那么支配关系就是"必经之路"的关系。支配边界则是从支配区域"走到"非支配区域的边界点。这个概念的严格定义需要图论知识，但直觉上很简单：一个变量的定义如果只在某个区域内有效，那么在该区域的边界上就需要 phi 函数来"合并"不同的可能值。
+        </div>
+
+        <h2>基本块与控制流图</h2>
+
+        <p>无论是三地址码还是 SSA，指令都不是随意排列的——它们被组织在<strong>基本块（Basic Block, BB）</strong>中，基本块之间通过<strong>控制流图（Control Flow Graph, CFG）</strong>连接。</p>
+
+        <h3>基本块的划分</h3>
+        <p><strong>基本块</strong>是满足两个条件的最大指令序列：</p>
+        <ul>
+            <li><strong>单一入口：</strong>只有第一条指令可能是跳转目标（除非从第一条开始，不可能从中间进入）。</li>
+            <li><strong>单一出口：</strong>只有最后一条指令可能是跳转语句或终止语句（除非执行到最后一条，不可能从中间跳出）。</li>
+        </ul>
+
+        <p>划分基本块的算法很简单：</p>
+        <pre><code>1. 确定所有<strong>入口指令</strong>（leader）：
+   - 程序的第一条指令是 leader
+   - 任何跳转指令的目标指令是 leader
+   - 任何跳转指令的下一条指令是 leader
+
+2. 从每个 leader 开始，直到下一个 leader 之前（或程序结束）
+   -> 这个区间就是一个基本块</code></pre>
+
+        <h3>CFG 的构建</h3>
+        <p>得到基本块列表后，我们通过分析基本块之间的跳转关系来构建 CFG：</p>
+        <pre><code>// 对于每个基本块 B:
+for (每个以 B 结尾的跳转指令) {
+    if (条件跳转) {
+        addEdge(B, trueTarget);   // 条件成立
+        addEdge(B, falseTarget);  // 条件不成立（fall-through）
+    } else if (无条件跳转) {
+        addEdge(B, target);
+    } else {
+        // 没有跳转：顺序执行到下一个基本块
+        addEdge(B, nextBlock);
+    }
+}</code></pre>
+
+        <p>构建出来的 CFG 是一个有向图，其中：</p>
+        <ul>
+            <li>节点 = 基本块</li>
+            <li>边 = 控制流转移（跳转或顺序执行）</li>
+            <li>有一个入口节点和一个或多个出口节点</li>
+        </ul>
+
+        <h3>支配树</h3>
+        <p>在 CFG 之上，我们可以构建<strong>支配树（Dominator Tree）</strong>：</p>
+        <pre><code>// 支配关系示例
+//
+//     CFG:             支配树:
+//     entry            entry
+//       |                |
+//       B1               B1
+//      /  \             /  \
+//     B2  B3           B2  B3
+//      \  /             \  /
+//       B4              B4
+//       |                |
+//      exit             exit
+//
+// B1 支配所有节点（因为所有路径都必须经过入口）
+// B2 只支配 B2 自身
+// B3 只支配 B3 自身
+// B4 被 B1 支配（所有到 B4 的路径都经过 B1）
+// B4 不被 B2 或 B3 支配（有路径可以不经 B2 或 B3 到达 B4）</code></pre>
+
+        <div class="highlight">
+            <strong>为什么支配树很重要：</strong>支配树是编译器优化的核心工具之一。它用于：SSA 构造中的 phi 函数插入位置计算、循环检测（循环头的特征是"被自身支配"）、代码移动（如循环不变式外提需要确保支配性）、还有各种基于控制流的优化分析。几乎每个重要的优化 pass 都会查询支配关系。理解支配树 = 理解现代编译器优化的基石。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>本章介绍了编译器架构中承上启下的关键一环——中间表示（IR）。我们了解了 IR 的设计目标（解耦前端与后端、便利优化），学习了经典的线性 IR——三地址码（TAC）的指令格式与生成方法，深入探讨了 SSA 形式的原理（唯一赋值、phi 函数、支配边界），以及基本块划分和 CFG 构建的基础知识。</p>
+
+        <p>下一章，我们将接触一个具体而强大的 IR——<strong>LLVM IR</strong>。LLVM 的 IR 是现代编译器工业中最成功的 IR 设计之一，它将三地址码和 SSA 形式有机地结合在一起，并提供了丰富的类型系统和指令集。学完下一章后，你将能够读懂和编写 .ll 格式的 LLVM IR 文件，并用 LLVM 工具链进行实际的编译实验。敬请期待。</p>
+
+        <div class="footer-nav">
+            <a href="10.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="12.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第9章 抽象语法树</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html" class="active">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第9章 抽象语法树</h2>
+
+        <p>大家好，我是你们的讲师。在上一章中，我们学会了用 ANTLR4 从文法定义自动生成解析器，并得到了完整的解析树（Parse Tree / CST）。解析树忠实地反映了文法的全部细节——包括每个括号、每个分隔符、每个关键字。但问题来了：对于编译器的后续阶段来说，这些细节中的大部分是<strong>噪声</strong>。</p>
+
+        <p>想想看，当你分析表达式 <code>(1 + 2) * 3</code> 时，你真的关心源代码中的那个左括号 '(' 和右括号 ')' 吗？不，你关心的是：这是一个乘法运算，左操作数是一个加法，右操作数是数字 3。括号只是为了在文法层面影响解析树的形状，但对语义分析、优化和代码生成来说，它的"任务"已经完成了。这就是为什么编译器在语法分析之后，会从 CST 构建出一个更简洁、更抽象的数据结构——<strong>抽象语法树（AST）</strong>。</p>
+
+        <div class="highlight">
+            <strong>核心概念：</strong>AST 提取了程序语义的"骨架"，去掉了那些纯语法性质的辅助节点（括号、分号、逗号分隔符等）。它只保留对后续阶段有意义的元素：运算符、操作数、语句类型、声明信息等。AST 的设计质量直接影响编译器的可维护性和后续优化能力，是编译器架构中最为关键的数据结构之一。
+        </div>
+
+        <h2>AST 与 CST 的关键区别</h2>
+
+        <p>很多初学者会混淆 CST（具体语法树，即解析树）和 AST。两者的区别可以用一句话概括：<strong>CST 包含所有语法细节，AST 只包含语义要素</strong>。让我们用一个具体例子来说明：</p>
+
+        <p>对于表达式 <code>a = 3 + 4 * 5;</code>：</p>
+
+        <ul>
+            <li><strong>CST（解析树）</strong>包含：赋值语句节点、标识符 <code>a</code>、等号 <code>=</code>、加法 <code>+</code>、乘法 <code>*</code>、数字 <code>3</code>、<code>4</code>、<code>5</code>、分号 <code>;</code>，以及文法引入的所有中间规则节点（如 <code>expr</code>、<code>term</code>、<code>factor</code> 等）。</li>
+            <li><strong>AST</strong> 只包含：赋值节点（Assignment，左子=变量 a，右子=加法表达式）、加法节点（BinaryOp: +，左子=3，右子=乘法）、乘法节点（BinaryOp: *，左子=4，右子=5）。分号、等号、中间规则节点全部消失。</li>
+        </ul>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>维度</th>
+                    <th>CST（解析树）</th>
+                    <th>AST</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>节点数量</td>
+                    <td>较多，包含文法中的每个规则和 token</td>
+                    <td>较少，只保留语义要素</td>
+                </tr>
+                <tr>
+                    <td>包含细节</td>
+                    <td>括号、分隔符、关键字、中间规则</td>
+                    <td>仅包含运算符、操作数和结构信息</td>
+                </tr>
+                <tr>
+                    <td>文法依赖</td>
+                    <td>紧密耦合于具体文法的写法</td>
+                    <td>与文法解耦，反映语言语义结构</td>
+                </tr>
+                <tr>
+                    <td>后续处理</td>
+                    <td>通常不直接用于语义分析或代码生成</td>
+                    <td>语义分析、优化、代码生成的主要输入</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>AST 节点设计</h2>
+
+        <p>设计良好的 AST 是编译器成功的一半。不同的语言特性和编译需求会影响 AST 的具体设计，但有一些通用的设计原则可以遵循。</p>
+
+        <h3>基类设计</h3>
+        <p>大多数 AST 实现采用<strong>组合模式（Composite Pattern）</strong>——所有节点继承自一个公共基类，基类定义统一接口：</p>
+
+        <pre><code>// AST 节点的公共基类
+abstract class ASTNode {
+    // 源码位置信息（所有节点都记录位置）
+    SourceLocation location;
+
+    // 虚方法：接受 Visitor（经典的 accept 方法）
+    public abstract &lt;T&gt; T accept(ASTVisitor&lt;T&gt; visitor);
+
+    // 子节点管理（可选，用于通用遍历）
+    public abstract List&lt;ASTNode&gt; getChildren();
+}
+
+// 具体节点类型：表达式（抽象）
+abstract class Expr extends ASTNode { }
+
+// 具体节点类型：语句（抽象）
+abstract class Stmt extends ASTNode { }
+
+// 二元运算表达式
+class BinaryExpr extends Expr {
+    String operator;       // "+", "-", "*", "/", etc.
+    Expr left, right;      // 左右子表达式
+
+    @Override
+    public &lt;T&gt; T accept(ASTVisitor&lt;T&gt; v) {
+        return v.visitBinaryExpr(this);
+    }
+}
+
+// 数值字面量
+class NumberLiteral extends Expr {
+    int value;
+
+    @Override
+    public &lt;T&gt; T accept(ASTVisitor&lt;T&gt; v) {
+        return v.visitNumberLiteral(this);
+    }
+}
+
+// 变量声明语句
+class VarDeclStmt extends Stmt {
+    String name;
+    Type type;
+    Expr initializer;
+
+    @Override
+    public &lt;T&gt; T accept(ASTVisitor&lt;T&gt; v) {
+        return v.visitVarDeclStmt(this);
+    }
+}</code></pre>
+
+        <h3>节点类型分类</h3>
+        <p>AST 节点通常按语义功能分为几个大类：</p>
+        <ul>
+            <li><strong>表达式节点（Expr）：</strong>表示一个值的计算，如字面量、二元运算、函数调用、数组访问等。</li>
+            <li><strong>语句节点（Stmt）：</strong>表示一个动作，如赋值、if-else、while 循环、return、变量声明等。</li>
+            <li><strong>声明节点（Decl）：</strong>表示函数声明、类声明、模块声明等顶层结构。</li>
+            <li><strong>类型节点（Type）：</strong>表示类型信息，如 int、float、指针类型、数组类型等。</li>
+        </ul>
+
+        <h2>Visitor 模式遍历</h2>
+
+        <p>有了 AST 之后，编译器的各个阶段（类型检查、优化、代码生成）都需要遍历这棵树。Visitor 模式是遍历 AST 的经典范式，它将算法与数据结构分离，让你可以为不同的任务编写不同的 Visitor，而无需修改 AST 节点的代码。</p>
+
+        <h3>accept/dispatch 机制</h3>
+        <p>Visitor 模式的核心是<strong>双重分发（Double Dispatch）</strong>：调用 <code>node.accept(visitor)</code> 时，具体调用 visitor 的哪个 visit 方法，是由 node 的实际类型决定的。这避免了繁琐的 <code>instanceof</code> 链：</p>
+
+        <pre><code>// Visitor 接口定义
+interface ASTVisitor&lt;T&gt; {
+    T visitBinaryExpr(BinaryExpr node);
+    T visitNumberLiteral(NumberLiteral node);
+    T visitVarDeclStmt(VarDeclStmt node);
+    T visitIfStmt(IfStmt node);
+    T visitWhileStmt(WhileStmt node);
+    // ... 为每种节点类型定义一个 visit 方法
+}
+
+// 具体的 Visitor：代码生成 —— 将 AST 输出为三地址码
+class CodeGenVisitor implements ASTVisitor&lt;String&gt; {
+
+    private int tempCounter = 0;
+    private String newTemp() { return "t" + tempCounter++; }
+
+    @Override
+    public String visitBinaryExpr(BinaryExpr node) {
+        String left = node.left.accept(this);   // 递归访问左子
+        String right = node.right.accept(this); // 递归访问右子
+        String result = newTemp();
+        emit(result + " = " + left + " " + node.operator + " " + right);
+        return result;
+    }
+
+    @Override
+    public String visitNumberLiteral(NumberLiteral node) {
+        return String.valueOf(node.value); // 直接返回数值字符串
+    }
+
+    private void emit(String code) {
+        System.out.println(code);
+    }
+}
+
+// 使用方式：只需要一行调用
+ASTNode ast = parse(source);
+ast.accept(new CodeGenVisitor());
+// 输出示例：
+// t0 = 3 + 4
+// t1 = t0 * 5</code></pre>
+
+        <div class="tip">
+            <strong>设计思路：</strong>注意 <code>visitBinaryExpr</code> 中的递归调用 <code>node.left.accept(this)</code> 和 <code>node.right.accept(this)</code>——这正是 Visitor 模式中"手动控制遍历顺序"的精髓。如果我们需要前序遍历，就先访问左子再访问右子；如果需要后序遍历，先处理子节点再处理当前节点。对于求值器来说，我们需要的是后序遍历（先算子表达式，再用结果计算父表达式），因此 <code>accept</code> 调用放在 emit 之前。
+        </div>
+
+        <h3>避免 instanceof 链</h3>
+        <p>如果没有 Visitor 模式，我们可能会写出这样的代码：</p>
+
+        <pre><code>// 反例：使用 instanceof 链进行节点分派
+// 这种代码难以维护、性能较差、且容易遗漏分支
+void traverse(ASTNode node) {
+    if (node instanceof BinaryExpr) {
+        BinaryExpr b = (BinaryExpr) node;
+        traverse(b.left);
+        traverse(b.right);
+        System.out.println("二元运算: " + b.operator);
+    } else if (node instanceof NumberLiteral) {
+        NumberLiteral n = (NumberLiteral) node;
+        System.out.println("数字: " + n.value);
+    } else if (node instanceof VarDeclStmt) {
+        // ...
+    }
+    // 每增加一种节点类型，这里就要加一个 else-if 分支
+    // 如果忘了加，编译器也不会报错，只会静默跳过！
+}</code></pre>
+
+        <p>使用 Visitor 模式后，如果你添加了新的 AST 节点类型，<code>ASTVisitor</code> 接口会强制要求你为它实现 <code>visitXxx</code> 方法——否则编译器会报错。这是编译期检查的力量。</p>
+
+        <h2>源码位置追踪</h2>
+
+        <p>在编译器中，"定位"能力至关重要。当用户写出有问题的代码时，编译器必须告诉他<strong>确切的位置</strong>。没有源码位置信息的 AST，就像没有经纬度的地图——毫无实用价值。</p>
+
+        <h3>SourceLocation 设计</h3>
+
+        <pre><code>// 源码位置信息
+class SourceLocation {
+    String filename;        // 源文件名
+    int line;               // 起始行号 (从1开始)
+    int column;             // 起始列号 (从1开始)
+    int length;             // token 或节点在源码中的长度
+
+    // 友好的错误报告格式
+    @Override
+    public String toString() {
+        return filename + ":" + line + ":" + column;
+    }
+}
+
+// 在创建 AST 节点时保存位置信息
+NumberLiteral num = new NumberLiteral(42);
+num.location = new SourceLocation("test.c", 3, 8, 2);
+// 表示 42 这个数字位于 test.c 的第3行第8列，长度为2个字符</code></pre>
+
+        <h3>错误报告精确定位</h3>
+        <p>有了 SourceLocation，错误报告才能做到精确且友好：</p>
+
+        <pre><code>// 语义分析中发现类型不匹配
+class TypeChecker extends BaseVisitor&lt;Type&gt; {
+    @Override
+    public Type visitBinaryExpr(BinaryExpr node) {
+        Type leftType = visit(node.left);
+        Type rightType = visit(node.right);
+
+        if (!leftType.equals(rightType)) {
+            reportError(
+                node.location,
+                String.format(
+                    "类型不匹配: 不能在 '%s' (%s) 和 '%s' (%s) 之间进行运算",
+                    node.left, leftType,
+                    node.right, rightType
+                )
+            );
+        }
+        // ...
+    }
+}
+
+// 输出示例：
+// test.c:3:8 错误: 类型不匹配: 不能在 'x' (int) 和 'y' (String) 之间进行运算
+// 第3行:     int z = x + y;
+//                    ^
+// 注意：有了 line/column/length，我们甚至能在错误消息中画出指向线</code></pre>
+
+        <h2>实战：构建算术表达式 AST 与 Pretty-Printer</h2>
+
+        <p>让我们将以上知识综合起来，为一个算术表达式语言构建完整的 AST 和一个漂亮的打印器（Pretty-Printer）。Pretty-Printer 是 AST 最经典的 Visitor 应用之一——它将 AST 还原为格式良好的源代码文本，常用于调试和代码重构。</p>
+
+        <pre><code>// ============ AST 定义 ============
+abstract class Expr {
+    abstract &lt;T&gt; T accept(ExprVisitor&lt;T&gt; visitor);
+}
+
+class Num extends Expr {
+    int value;
+    Num(int value) { this.value = value; }
+    &lt;T&gt; T accept(ExprVisitor&lt;T&gt; v) { return v.visitNum(this); }
+}
+
+class Add extends Expr {
+    Expr left, right;
+    Add(Expr left, Expr right) { this.left = left; this.right = right; }
+    &lt;T&gt; T accept(ExprVisitor&lt;T&gt; v) { return v.visitAdd(this); }
+}
+
+class Sub extends Expr {
+    Expr left, right;
+    Sub(Expr left, Expr right) { this.left = left; this.right = right; }
+    &lt;T&gt; T accept(ExprVisitor&lt;T&gt; v) { return v.visitSub(this); }
+}
+
+class Mul extends Expr {
+    Expr left, right;
+    Mul(Expr left, Expr right) { this.left = left; this.right = right; }
+    &lt;T&gt; T accept(ExprVisitor&lt;T&gt; v) { return v.visitMul(this); }
+}
+
+// ============ Visitor 接口 ============
+interface ExprVisitor&lt;T&gt; {
+    T visitNum(Num node);
+    T visitAdd(Add node);
+    T visitSub(Sub node);
+    T visitMul(Mul node);
+}
+
+// ============ Pretty-Printer ============
+class PrettyPrinter implements ExprVisitor&lt;String&gt; {
+    // 显示优先级：加法/减法为1，乘法为2
+    private int parentPrec = 0;
+
+    PrettyPrinter() { this.parentPrec = 0; }
+
+    private PrettyPrinter(int prec) { this.parentPrec = prec; }
+
+    @Override
+    public String visitNum(Num node) {
+        return Integer.toString(node.value);
+    }
+
+    @Override
+    public String visitAdd(Add node) {
+        return printBinOp(node.left, 1, "+", node.right, 1);
+    }
+
+    @Override
+    public String visitSub(Sub node) {
+        return printBinOp(node.left, 1, "-", node.right, 1);
+    }
+
+    @Override
+    public String visitMul(Mul node) {
+        return printBinOp(node.left, 2, "*", node.right, 2);
+    }
+
+    private String printBinOp(Expr left, int leftPrec,
+                               String op, Expr right, int rightPrec) {
+        String l = wrap(left, leftPrec, this.parentPrec);
+        String r = wrap(right, rightPrec, this.parentPrec);
+        return l + " " + op + " " + r;
+    }
+
+    private String wrap(Expr expr, int prec, int parentPrec) {
+        String result = expr.accept(new PrettyPrinter(prec));
+        // 如果子表达式的优先级低于父表达式，需要加括号
+        if (prec &lt; parentPrec) {
+            return "(" + result + ")";
+        }
+        return result;
+    }
+}
+
+// ============ 演示 ============
+// 构造 AST: 1 + 2 * 3
+//     (+)
+//    /   \
+//   1    (*)
+//       /   \
+//      2     3
+Expr ast = new Add(
+    new Num(1),
+    new Mul(new Num(2), new Num(3))
+);
+
+PrettyPrinter pp = new PrettyPrinter();
+System.out.println(ast.accept(pp));
+// 输出: 1 + 2 * 3  (正确！乘法优先级高，没有多余的括号)
+
+// 构造 AST: (1 + 2) * 3
+//     (*)
+//    /   \
+//  (+)    3
+//  / \
+// 1   2
+Expr ast2 = new Mul(
+    new Add(new Num(1), new Num(2)),
+    new Num(3)
+);
+System.out.println(ast2.accept(pp));
+// 输出: (1 + 2) * 3  (正确！因为加法优先级低于乘法，自动插入了括号)</code></pre>
+
+        <div class="highlight">
+            <strong>关键洞察：</strong>上面的 Pretty-Printer 中，<code>prec</code>（优先级参数）与 <code>parentPrec</code> 的比较是决定是否加括号的核心逻辑。当子表达式的优先级（如加法为1）低于父表达式（如乘法为2）时，就需要加括号。如果不需要考虑优先级（比如所有运算都用括号包裹），那么 Pretty-Printer 的实现会简单得多，但输出也会冗长得多。这个优先级感知的 Pretty-Printer 展示了 AST 遍历中的一个重要技巧：通过参数在父子节点之间传递上下文信息。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们深入探讨了抽象语法树——编译器内部最核心的数据结构。你学到了 AST 与 CST 的关键区别（冗余 vs 精简）、AST 节点的分层设计模式（基类 + accept 方法）、Visitor 模式遍历 AST 的双重分发机制、以及源码位置追踪在错误报告中的关键作用。最后通过一个算术表达式 AST 的 Pretty-Printer 实战，将这几方面的知识串联了起来。</p>
+
+        <p>有了 AST 这个清晰的程序表示之后，编译器的下一个阶段——<strong>语义分析</strong>——就可以在 AST 上展开了。在下一章中，我们将学习符号表的管理、类型检查的算法、以及各种作用域规则的处理。敬请期待。</p>
+
+        <div class="footer-nav">
+            <a href="08.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="10.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>
