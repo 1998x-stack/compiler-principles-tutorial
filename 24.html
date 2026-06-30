@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第24章 用ANTLR+LLVM实现语言</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html" class="active">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第24章 用ANTLR+LLVM实现语言</h2>
+
+        <p>大家好，我是你们的讲师。经过二十多章的学习，我们已经把编译原理的各个模块拆解了一遍：词法分析、语法分析、语义分析、中间表示、代码生成、优化……现在是时候把这些知识<strong>真正串联起来</strong>了。这一章的目标非常明确：<strong>从零到一，完整实现一门编程语言的编译器</strong>。</p>
+
+        <p>我们将采用"工业级组合拳"——用 <strong>ANTLR</strong> 生成前端（词法/语法分析器），用 <strong>LLVM</strong> 作为后端（IR 生成与 JIT 执行）。这两个工具都是各自领域的标杆，将它们组合在一起，你就拥有了构建一门真实语言的完整能力。我们将设计一门名为 <strong>TinyLang</strong> 的微型语言，支持变量声明、算术运算、条件分支和循环——麻雀虽小，五脏俱全。</p>
+
+        <h2>自定义语言设计</h2>
+
+        <p>在写任何代码之前，我们需要先回答一个问题：<strong>TinyLang 要支持哪些特性？</strong>语言设计是编译器的"顶层建筑"，它直接决定了后续所有工作的复杂程度。</p>
+
+        <h3>语言特性定义</h3>
+
+        <p>TinyLang 的设计目标是用最少的特性，展示编译器全流程的各个阶段。它支持以下核心功能：</p>
+
+        <ul>
+            <li><strong>变量声明与赋值：</strong><code>let x: int = 42;</code></li>
+            <li><strong>基本算术运算：</strong><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></li>
+            <li><strong>条件分支：</strong><code>if (x &gt; 0) { ... } else { ... }</code></li>
+            <li><strong>循环：</strong><code>while (x &gt; 0) { ... }</code></li>
+            <li><strong>函数定义与调用：</strong><code>func add(a: int, b: int) -> int { ... }</code></li>
+            <li><strong>打印输出：</strong><code>print(x);</code></li>
+        </ul>
+
+        <h3>类型系统设计</h3>
+
+        <p>TinyLang 采用<strong>静态类型系统</strong>，支持三种基础类型：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>类型</th>
+                    <th>关键字</th>
+                    <th>LLVM 对应类型</th>
+                    <th>说明</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>整数</td>
+                    <td><code>int</code></td>
+                    <td><code>i32</code></td>
+                    <td>32位有符号整数</td>
+                </tr>
+                <tr>
+                    <td>浮点数</td>
+                    <td><code>double</code></td>
+                    <td><code>double</code></td>
+                    <td>64位双精度浮点</td>
+                </tr>
+                <tr>
+                    <td>布尔</td>
+                    <td><code>bool</code></td>
+                    <td><code>i1</code></td>
+                    <td>真/假值</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>所有变量必须显式声明类型，编译器会在编译时进行<strong>类型检查</strong>。例如，不允许将 <code>bool</code> 值赋给 <code>int</code> 类型的变量。</p>
+
+        <h3>语法规范</h3>
+
+        <p>下面是一个完整的 TinyLang 程序示例：</p>
+
+        <pre><code>// TinyLang 示例程序：计算阶乘
+func factorial(n: int) -> int {
+    if (n &lt;= 1) {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+
+func main() -> int {
+    let result: int = factorial(10);
+    print(result);
+    return 0;
+}</code></pre>
+
+        <p>这个例子展示了 TinyLang 的几个核心语法特性：注释（<code>//</code>）、函数定义（<code>func</code>）、条件分支（<code>if/else</code>）、递归调用、以及 <code>print</code> 输出。看起来很简洁，但编译器需要处理的前端和后端逻辑却相当丰富。</p>
+
+        <h2>ANTLR 语法到 AST</h2>
+
+        <p>确定了语言特性之后，第一件实际工作就是用 ANTLR 定义 TinyLang 的语法文件，并生成对应的词法/语法分析器。</p>
+
+        <h3>ANTLR 语法文件</h3>
+
+        <p>首先编写 <code>TinyLang.g4</code> 文件，定义词法规则和语法规则：</p>
+
+        <pre><code>// TinyLang.g4 —— TinyLang 的 ANTLR 文法
+grammar TinyLang;
+
+// === 语法规则 ===
+program         : (functionDecl)* EOF ;
+
+functionDecl    : FUNC ID LPAREN paramList? RPAREN
+                  (ARROW type)? block ;
+
+paramList       : param (COMMA param)* ;
+param           : ID COLON type ;
+
+block           : LBRACE statement* RBRACE ;
+
+statement       : varDecl
+                | assignment
+                | ifStmt
+                | whileStmt
+                | returnStmt
+                | printStmt
+                | block
+                ;
+
+varDecl         : LET ID COLON type ASSIGN expression SEMI ;
+assignment      : ID ASSIGN expression SEMI ;
+ifStmt          : IF LPAREN expression RPAREN block
+                  (ELSE block)? ;
+whileStmt       : WHILE LPAREN expression RPAREN block ;
+returnStmt      : RETURN expression? SEMI ;
+printStmt       : PRINT LPAREN expression RPAREN SEMI ;
+
+expression      : logicalOr ;
+logicalOr       : logicalAnd (OR logicalAnd)* ;
+logicalAnd      : equality (AND equality)* ;
+equality        : comparison ((EQ | NE) comparison)* ;
+comparison      : term ((LT | GT | LE | GE) term)* ;
+term            : factor ((PLUS | MINUS) factor)* ;
+factor          : unary ((MUL | DIV) unary)* ;
+unary           : (NOT | MINUS) unary | primary ;
+primary         : INT_LITERAL
+                | DOUBLE_LITERAL
+                | BOOL_LITERAL
+                | ID LPAREN argumentList? RPAREN  // 函数调用
+                | ID                               // 变量引用
+                | LPAREN expression RPAREN
+                ;
+
+argumentList    : expression (COMMA expression)* ;
+
+type            : INT_TYPE | DOUBLE_TYPE | BOOL_TYPE ;
+
+// === 词法规则 ===
+FUNC            : 'func' ;
+LET             : 'let' ;
+IF              : 'if' ;
+ELSE            : 'else' ;
+WHILE           : 'while' ;
+RETURN          : 'return' ;
+PRINT           : 'print' ;
+INT_TYPE        : 'int' ;
+DOUBLE_TYPE     : 'double' ;
+BOOL_TYPE       : 'bool' ;
+TRUE            : 'true' ;
+FALSE           : 'false' ;
+AND             : 'and' ;
+OR              : 'or' ;
+NOT             : 'not' ;
+
+PLUS            : '+' ;    MINUS   : '-' ;
+MUL             : '*' ;    DIV     : '/' ;
+ASSIGN          : '=' ;
+EQ              : '==' ;   NE      : '!=' ;
+LT              : '&lt;' ;    GT      : '&gt;' ;
+LE              : '&lt;=' ;   GE      : '&gt;=' ;
+LPAREN          : '(' ;    RPAREN  : ')' ;
+LBRACE          : '{' ;    RBRACE  : '}' ;
+COLON           : ':' ;    SEMI    : ';' ;
+COMMA           : ',' ;
+ARROW           : '->' ;
+
+INT_LITERAL     : [0-9]+ ;
+DOUBLE_LITERAL  : [0-9]+ '.' [0-9]+ ;
+BOOL_LITERAL    : TRUE | FALSE ;
+ID              : [a-zA-Z_][a-zA-Z0-9_]* ;
+WS              : [ \t\r\n]+ -> skip ;
+COMMENT         : '//' ~[\r\n]* -> skip ;</code></pre>
+
+        <div class="tip">
+            <strong>语法设计要点：</strong>注意我们在文法中处理的<strong>运算符优先级</strong>——从低到高依次是：逻辑或（or）→ 逻辑与（and）→ 相等性（==, !=）→ 比较（&lt;, >）→ 加减 → 乘除 → 一元（负号/not）→ 基本单元。每一层都封装在独立的语法规则中，这正是"优先级攀升"（Precedence Climbing）的经典实现方式。
+        </div>
+
+        <h3>监听器构建 AST</h3>
+
+        <p>ANTLR 生成了词法/语法分析器之后，我们需要将解析树转换为更易于处理的<strong>抽象语法树（AST）</strong>。我们可以通过实现 ANTLR 的监听器（Listener）或访问者（Visitor）来完成这一转换。这里我们采用 Visitor 模式，因为它提供了更灵活的控制：</p>
+
+        <pre><code>// AST 节点定义（Java 示例）
+abstract class ASTNode {}
+
+class ProgramNode extends ASTNode {
+    List&lt;FunctionNode&gt; functions;
+}
+
+class FunctionNode extends ASTNode {
+    String name;
+    List&lt;ParamNode&gt; params;
+    TypeNode returnType;
+    BlockNode body;
+}
+
+class BlockNode extends ASTNode {
+    List&lt;StatementNode&gt; statements;
+}
+
+class VarDeclNode extends StatementNode {
+    String name;
+    TypeNode type;
+    ExpressionNode init;
+}
+
+class BinaryOpNode extends ExpressionNode {
+    String op;
+    ExpressionNode left, right;
+}
+
+class IfNode extends StatementNode {
+    ExpressionNode condition;
+    BlockNode thenBlock;
+    BlockNode elseBlock;  // 可能为 null
+}
+
+class WhileNode extends StatementNode {
+    ExpressionNode condition;
+    BlockNode body;
+}</code></pre>
+
+        <h3>类型检查集成</h3>
+
+        <p>AST 构建完成后，我们执行一次<strong>语义分析</strong>——主要是类型检查。以一个简单的类型检查 Visitor 为例：</p>
+
+        <pre><code>class TypeChecker {
+    private Map&lt;String, TypeNode&gt; symbolTable = new HashMap&lt;&gt;();
+
+    TypeNode visit(VarDeclNode node) {
+        // 检查右侧表达式类型是否与声明类型匹配
+        TypeNode exprType = visit(node.init);
+        if (exprType != node.type) {
+            throw new TypeException(
+                "类型不匹配: 期望 " + node.type +
+                ", 但表达式类型为 " + exprType);
+        }
+        symbolTable.put(node.name, node.type);
+        return node.type;
+    }
+
+    TypeNode visit(BinaryOpNode node) {
+        TypeNode leftType = visit(node.left);
+        TypeNode rightType = visit(node.right);
+
+        if (leftType != rightType) {
+            throw new TypeException(
+                "二元运算类型不匹配: " + leftType + " vs " + rightType);
+        }
+        if (node.op.equals("+") || node.op.equals("-") ||
+            node.op.equals("*") || node.op.equals("/")) {
+            if (leftType != TypeNode.INT &amp;&amp; leftType != TypeNode.DOUBLE) {
+                throw new TypeException(
+                    "算术运算只支持 int 或 double");
+            }
+        }
+        return leftType;
+    }
+
+    TypeNode visit(IfNode node) {
+        TypeNode condType = visit(node.condition);
+        if (condType != TypeNode.BOOL) {
+            throw new TypeException(
+                "if 条件必须是 bool 类型");
+        }
+        visit(node.thenBlock);
+        if (node.elseBlock != null) visit(node.elseBlock);
+        return null;
+    }
+}</code></pre>
+
+        <h2>AST 到 LLVM IR</h2>
+
+        <p>AST 构建完成并通过类型检查之后，下一步也是最核心的一步——<strong>将 AST 翻译为 LLVM IR</strong>。这一步将使用 LLVM 的 C++ API，通过 <code>IRBuilder</code> 逐步构建 IR。</p>
+
+        <h3>IRBuilder 基础</h3>
+
+        <p><code>IRBuilder</code> 是 LLVM C++ API 中最重要的工具类。它提供了一组便捷方法，用于在当前位置插入 IR 指令：</p>
+
+        <pre><code>// LLVM IR 生成器 —— 代码生成的核心
+class CodeGenerator {
+private:
+    LLVMContext context;
+    IRBuilder&lt;&gt; builder;
+    Module module;
+    Function mainFunction;
+
+    // 符号表：变量名 -> AllocaInst（栈上分配）
+    std::map&lt;std::string, AllocaInst*&gt; namedValues;
+
+public:
+    CodeGenerator() : module("TinyLangModule", context), builder(context) {}
+
+    // === 表达式 IR 生成 ===
+    Value* visit(BinaryOpNode&amp; node) {
+        Value* L = visit(node.left);
+        Value* R = visit(node.right);
+
+        switch (node.op) {
+            case '+': return builder.CreateAdd(L, R, "addtmp");
+            case '-': return builder.CreateSub(L, R, "subtmp");
+            case '*': return builder.CreateMul(L, R, "multmp");
+            case '/': return builder.CreateSDiv(L, R, "divtmp");
+            case '==': return builder.CreateICmpEQ(L, R, "cmptmp");
+            case '&lt;':  return builder.CreateICmpSLT(L, R, "cmptmp");
+            // ...
+        }
+    }
+
+    // === 变量声明 IR 生成 ===
+    Value* visit(VarDeclNode&amp; node) {
+        // alloca 在栈上分配空间
+        AllocaInst* alloca = builder.CreateAlloca(
+            getLLVMType(node.type), nullptr, node.name);
+
+        // 如果有初始值，store 进去
+        if (node.init != nullptr) {
+            Value* initVal = visit(node.init);
+            builder.CreateStore(initVal, alloca);
+        }
+
+        namedValues[node.name] = alloca;
+        return alloca;
+    }
+
+    // === 变量赋值 IR 生成 ===
+    Value* visit(AssignmentNode&amp; node) {
+        AllocaInst* alloca = namedValues[node.name];
+        Value* val = visit(node.expression);
+
+        // 生成 store 指令：将值写入 alloca 地址
+        return builder.CreateStore(val, alloca);
+    }
+
+    // === 变量引用 IR 生成 ===
+    Value* visit(VariableRefNode&amp; node) {
+        AllocaInst* alloca = namedValues[node.name];
+        // 生成 load 指令：从 alloca 地址读取值
+        return builder.CreateLoad(alloca-&gt;getAllocatedType(), alloca,
+                                  node.name.c_str());
+    }
+};</code></pre>
+
+        <h3>alloca/store/load 模式</h3>
+
+        <p>LLVM IR 中，局部变量的标准处理方式是 <strong>alloca/store/load</strong> 模式：</p>
+
+        <ul>
+            <li><code>alloca</code>：在栈帧上分配一块内存</li>
+            <li><code>store</code>：将值写入分配的内存</li>
+            <li><code>load</code>：从内存中读取值</li>
+        </ul>
+
+        <p>这种模式的好处是统一了变量的读写接口，简化了 SSA（静态单赋值）形式的管理。但缺点是每次变量读写都会产生内存操作。优化 Pass（如 <code>mem2reg</code>）会后续将这些 alloca 提升为 SSA 寄存器，从而消除不必要的内存访问。</p>
+
+        <pre><code>; alloca/store/load 模式生成的 IR 示例
+; 源代码：let x: int = 42;
+%x = alloca i32                ; 分配栈空间
+store i32 42, i32* %x          ; 存储初始值
+
+; 源代码：x = x + 1;
+%0 = load i32, i32* %x         ; 读取 x 的值
+%1 = add i32 %0, 1             ; 执行加法
+store i32 %1, i32* %x          ; 写回结果</code></pre>
+
+        <h3>控制流 IR 生成</h3>
+
+        <p>生成控制流（if/while）的 IR 是代码生成中最具挑战性的部分。核心是创建<strong>基本块（BasicBlock）</strong>，并用<strong>分支指令（br）</strong>将它们连接起来：</p>
+
+        <pre><code>// if 语句的 IR 生成
+Value* visit(IfNode&amp; node) {
+    Function* fn = builder.GetInsertBlock()-&gt;getParent();
+
+    // 创建三个基本块
+    BasicBlock* thenBB = BasicBlock::Create(context, "then", fn);
+    BasicBlock* elseBB = BasicBlock::Create(context, "else");
+    BasicBlock* mergeBB = BasicBlock::Create(context, "ifcont");
+
+    // 评估条件
+    Value* condVal = visit(node.condition);
+    // 将条件值转换为 i1（布尔值）
+    condVal = builder.CreateICmpNE(condVal,
+                                   ConstantInt::get(Type::getInt32Ty(context), 0),
+                                   "ifcond");
+
+    // 条件分支
+    if (node.elseBlock) {
+        builder.CreateCondBr(condVal, thenBB, elseBB);
+    } else {
+        builder.CreateCondBr(condVal, thenBB, mergeBB);
+    }
+
+    // 生成 then 分支
+    builder.SetInsertPoint(thenBB);
+    visit(node.thenBlock);
+    builder.CreateBr(mergeBB);  // 跳转回 merge
+    // thenBB 可能在 visit 中被修改，需要获取最新值
+    thenBB = builder.GetInsertBlock();
+
+    // 生成 else 分支（如果有）
+    if (node.elseBlock) {
+        fn-&gt;getBasicBlockList().push_back(elseBB);
+        builder.SetInsertPoint(elseBB);
+        visit(node.elseBlock);
+        builder.CreateBr(mergeBB);
+        elseBB = builder.GetInsertBlock();
+    }
+
+    // 生成 merge 基本块
+    fn-&gt;getBasicBlockList().push_back(mergeBB);
+    builder.SetInsertPoint(mergeBB);
+
+    return nullptr;
+}
+
+// while 循环的 IR 生成
+Value* visit(WhileNode&amp; node) {
+    Function* fn = builder.GetInsertBlock()-&gt;getParent();
+
+    // 创建三个基本块：条件判断、循环体、后续
+    BasicBlock* condBB = BasicBlock::Create(context, "while.cond", fn);
+    BasicBlock* bodyBB = BasicBlock::Create(context, "while.body");
+    BasicBlock* afterBB = BasicBlock::Create(context, "while.after");
+
+    // 无条件跳转到条件判断块
+    builder.CreateBr(condBB);
+    builder.SetInsertPoint(condBB);
+
+    // 评估条件
+    Value* condVal = visit(node.condition);
+    condVal = builder.CreateICmpNE(condVal,
+                                   ConstantInt::get(Type::getInt32Ty(context), 0),
+                                   "whilecond");
+    builder.CreateCondBr(condVal, bodyBB, afterBB);
+
+    // 生成循环体
+    fn-&gt;getBasicBlockList().push_back(bodyBB);
+    builder.SetInsertPoint(bodyBB);
+    visit(node.body);
+    // 循环体结尾跳回条件判断
+    builder.CreateBr(condBB);
+
+    // 生成后续基本块
+    fn-&gt;getBasicBlockList().push_back(afterBB);
+    builder.SetInsertPoint(afterBB);
+
+    return nullptr;
+}</code></pre>
+
+        <div class="highlight">
+            <strong>控制流生成的精髓：</strong>LLVM IR 要求所有基本块必须形成一个<strong>闭合的控制流图</strong>——每个基本块必须以分支或返回指令结尾，并且不能有"悬空"的块。在生成 if 语句时，then 和 else 分支的末尾都必须跳转到 merge 块。在生成 while 循环时，循环体末尾必须跳转回条件判断块。正确管理 <code>SetInsertPoint</code> 和基本块的创建顺序是避免崩溃和验证错误的关键。
+        </div>
+
+        <h2>LLVM JIT 执行</h2>
+
+        <p>生成 LLVM IR 之后，我们有两种执行方式：<strong>静态编译</strong>（通过 llc + 汇编器 + 链接器）和 <strong>JIT 即时编译</strong>。JIT 方式让 TinyLang 获得了一把"解释器"式的即时反馈体验——这正是现代语言的标配能力。</p>
+
+        <h3>ORC JIT</h3>
+
+        <p>LLVM 的 ORC（On Request Compilation）JIT 是新一代的 JIT 编译框架，取代了早期的 MCJIT。ORC JIT 具有模块化设计、懒编译、增量编译等先进特性：</p>
+
+        <pre><code>#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/TargetSelect.h"
+
+using namespace llvm;
+using namespace llvm::orc;
+
+int main(int argc, char* argv[]) {
+    InitializeNativeTarget();
+    InitializeNativeTargetAsmPrinter();
+
+    // 创建 LLJIT 实例
+    auto JIT = ExitOnErr(LLJITBuilder().create());
+
+    // 假设我们已经将 TinyLang 源码编译为 Module
+    auto M = std::make_unique&lt;Module&gt;("TinyLangModule", getGlobalContext());
+    // ... 用 IRBuilder 生成 Module 的内容 ...
+
+    // 将 Module 添加到 JIT
+    ExitOnErr(JIT-&gt;addIRModule(
+        ThreadSafeModule(std::move(M), std::make_unique&lt;LLVMContext&gt;())));
+
+    // 查找并调用 main 函数
+    auto MainSym = ExitOnErr(JIT-&gt;lookup("main"));
+    auto* MainFunc = (int (*)())MainSym.getAddress();
+    int result = MainFunc();
+
+    errs() &lt;&lt; "程序返回值: " &lt;&lt; result &lt;&lt; "\n";
+    return 0;
+}</code></pre>
+
+        <h3>REPL 体验</h3>
+
+        <p>JIT 的强大之处在于它可以实现<strong>REPL（Read-Eval-Print Loop）</strong>交互式编程环境。每次用户输入一条语句，我们就动态编译并执行它：</p>
+
+        <pre><code>// TinyLang REPL 主循环
+void repl() {
+    auto JIT = ExitOnErr(LLJITBuilder().create());
+
+    while (true) {
+        std::string line;
+        std::cout &lt;&gt; line;
+
+        if (line == ":quit") break;
+        if (line.empty()) continue;
+
+        // 1. 词法/语法分析
+        CharStream input(line);
+        TinyLangLexer lexer(&amp;input);
+        CommonTokenStream tokens(&amp;lexer);
+        TinyLangParser parser(&amp;tokens);
+        auto* tree = parser.statement();
+
+        // 2. AST 构建与类型检查
+        AstBuilder astBuilder;
+        auto* ast = astBuilder.visit(tree);
+        TypeChecker checker;
+        checker.visit(ast);
+
+        // 3. 生成 LLVM IR 并 JIT 执行
+        CodeGenerator codegen;
+        codegen.visit(ast);
+        auto module = codegen.getModule();
+
+        // 4. 添加到 JIT 并执行
+        ExitOnErr(JIT-&gt;addIRModule(
+            ThreadSafeModule(std::move(module),
+                             std::make_unique&lt;LLVMContext&gt;())));
+
+        // 5. 查找并执行
+        auto sym = ExitOnErr(JIT-&gt;lookup("__anonymous"));
+        auto* fn = (void (*)())sym.getAddress();
+        fn();
+
+        std::cout &lt;&lt; "✓ 执行完成\n";
+    }
+}</code></pre>
+
+        <h3>JIT 优化管线</h3>
+
+        <p>ORC JIT 默认会在编译时对 IR 应用优化。你可以自定义优化管线，控制 JIT 编译的优化级别：</p>
+
+        <pre><code>// 自定义 JIT 优化管线
+class TinyLangJIT {
+private:
+    std::unique_ptr&lt;LLJIT&gt; jit;
+
+public:
+    TinyLangJIT() {
+        // 创建 LLJIT 并配置优化
+        LLJITBuilder builder;
+        builder.setCompileFunctionCreator(
+            [&amp;](JITTargetMachineBuilder JTMB)
+                -> Expected&lt;std::unique_ptr&lt;IRCompileLayer::CompileFunction&gt;&gt; {
+
+                auto TM = JTMB.createTargetMachine();
+                // 设置 -O2 优化级别
+                TM-&gt;setOptLevel(CodeGenOpt::Default);
+
+                auto Compile = std::make_unique&lt;
+                    SimpleCompiler&gt;(*TM);
+                return Compile;
+            });
+
+        jit = ExitOnErr(builder.create());
+    }
+
+    // 按需设置不同优化级别
+    void setOptimizationLevel(CodeGenOpt::Level Level) {
+        // 在添加 Module 前可以修改 TargetMachine 配置
+    }
+};</code></pre>
+
+        <div class="warning">
+            <strong>JIT 开发陷阱：</strong>使用 ORC JIT 时，最常见的错误是 <strong>Module 所有权</strong>管理不当。一个 <code>ThreadSafeModule</code> 被添加到 JIT 后，其所有权就转移给了 JIT。如果你尝试再次使用同一个模块，会导致崩溃。另一个常见问题是符号冲突——多个模块中定义了同名函数，ORC JIT 默认会报 duplicate definition 错误。解决方案是使用 <code>DynamicLibrarySearchGenerator</code> 或为每个模块使用独立的命名空间。
+        </div>
+
+        <h2>TinyLang 完整编译流程</h2>
+
+        <p>现在让我们把整个流程串联起来，看看 TinyLang 编译器工作的完整流水线：</p>
+
+        <pre><code>源代码（.tiny 文件）
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Phase 1: 词法/语法分析（ANTLR）      │
+│  输入: TinyLang 源码字符串             │
+│  输出: ParseTree (ANTLR 解析树)       │
+│  工具: TinyLangLexer + TinyLangParser │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Phase 2: AST 构建（自定义 Visitor） │
+│  输入: ParseTree                    │
+│  输出: AST (ProgramNode, FunctionNode, ...)│
+│  操作: 遍历解析树，构建语义化 AST     │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Phase 3: 语义分析（TypeChecker）    │
+│  输入: AST                          │
+│  输出: 带类型注解的 AST（或类型错误） │
+│  操作: 类型检查、符号表管理           │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Phase 4: LLVM IR 生成（CodeGenerator）│
+│  输入: 类型检查后的 AST               │
+│  输出: llvm::Module (LLVM IR)        │
+│  工具: IRBuilder, AllocaInst         │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Phase 5: JIT 编译与执行（ORC JIT）  │
+│  输入: llvm::Module                 │
+│  输出: 可执行函数（机器码）           │
+│  工具: LLJIT, ThreadSafeModule       │
+└─────────────────────────────────────┘
+    │
+    ▼
+程序运行结果</code></pre>
+
+        <p>这条流水线从源代码到程序执行结果只经过 5 个清晰定义的阶段。每一个阶段都只依赖前一阶段的输出，形成了一个高度模块化、可测试的架构。如果需要添加新的语言特性，你通常只需要修改一到两个阶段：添加语法规则（Phase 1）、添加 AST 节点（Phase 2）、实施类型规则（Phase 3）、生成对应 IR（Phase 4）。</p>
+
+        <div class="tip">
+            <strong>动手扩展：</strong>尝试为 TinyLang 添加 <code>for</code> 循环语法。你只需要：(1) 在 <code>TinyLang.g4</code> 中添加 <code>forStmt</code> 语法规则（记住 ANTLR 的写法）; (2) 创建 <code>ForNode</code> AST 节点; (3) 在 TypeChecker 中处理 <code>ForNode</code>; (4) 在 CodeGenerator 中用 <code>IRBuilder</code> 生成 for 循环的 IR（本质上是用 br 指令实现：初始化 → 条件 → 体 → 步进 → 条件）。这个练习能让你深刻体会到"前端改规则、中端改结构、后端改 IR"的编译器分层思想。
+        </div>
+
+        <h2>本章小结</h2>
+
+        <p>这一章我们完成了一件了不起的事情——用 ANTLR 和 LLVM 从零构建了一门完整的编程语言 TinyLang。我们从语言设计出发，定义了 TinyLang 的语法特性和类型系统；然后用 ANTLR 文法文件生成了前端的词法/语法分析器；接着通过自定义 Visitor 将解析树转换为 AST 并完成了类型检查；之后用 LLVM 的 IRBuilder 将 AST 翻译为 LLVM IR；最终通过 ORC JIT 实现了即时编译与执行。这条"前端 ANTLR → 中端 IR → 后端 JIT"的流水线，与 GCC、Clang、rustc 等工业级编译器在架构上是一脉相承的。</p>
+
+        <p>掌握了从零实现语言的能力之后，你的下一站是<strong>调试与性能分析</strong>——构建一个编译器只是第一步，如何保证它生成正确、高效的代码？第25章我们将深入编译器自身的调试技术、性能基准测试（SPEC CPU）、以及 Fuzz 测试（CSmith）等话题，让你的编译器开发能力从"能写"提升到"能写好"的层次。敬请期待。</p>
+
+        <div class="footer-nav">
+            <a href="23.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="25.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

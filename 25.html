@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第25章 调试与性能分析</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html" class="active">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第25章 调试与性能分析</h2>
+
+        <p>大家好，我是你们的讲师。经过前面二十多章的学习，你已经理解了编译器的内部构造，掌握了 LLVM 工具链的用法，甚至用 ANTLR + LLVM 实现了一门自己的语言。但这里有一个残酷的现实：<strong>你写的编译器大概率是有 Bug 的</strong>。而且这些 Bug 非常隐蔽——编译器产生的错误代码可能不会立即崩溃，而是静默地产生错误结果，或者只有在特定的优化级别下才暴露。</p>
+
+        <p>编译器是所有软件的"底层基石"，它的正确性和性能直接影响着它编译的所有程序。因此，<strong>编译器的测试和调试</strong>是一个独立且极其重要的技术领域。这一章我们将从三个维度来探讨这个话题：<strong>性能分析</strong>（如何衡量和优化编译器自身的性能）、<strong>基准测试</strong>（如何客观评价编译器的代码生成质量）、以及 <strong>Fuzz 测试</strong>（如何大规模自动化地发现编译器中的 Bug）。学完本章，你将不仅是一个编译器的构建者，还将成为一个合格的编译器质量守护者。</p>
+
+        <h2>编译器性能分析</h2>
+
+        <p>编译器也是一个程序，它也需要优化。但编译器优化与普通程序优化有很大不同——<strong>编译器是 CPU 密集型且 I/O 密集型的混合体</strong>。它既要做大量的内存分配和数据结构操作（解析、AST 构建），也要读写大量文件（源文件、中间文件、目标文件）。</p>
+
+        <h3>perf 采样热点</h3>
+
+        <p><code>perf</code> 是 Linux 平台上最强大的性能分析工具，可以精确定位编译器运行时的 CPU 热点：</p>
+
+        <pre><code># 1. 记录 Clang 编译某个大文件时的性能数据
+$ perf record -g -- clang -O2 large_file.c -o large_file.o
+
+# 2. 查看性能报告
+$ perf report -g graph
+
+# 3. 生成火焰图（需要 FlameGraph 工具）
+$ perf script &gt; out.perf
+$ ./stackcollapse-perf.pl out.perf &gt; out.folded
+$ ./flamegraph.pl out.folded &gt; compiler_flamegraph.svg
+
+# 4. 统计各阶段的耗时
+$ perf stat -- clang -O2 large_file.c -o large_file.o
+  Performance counter stats for 'clang -O2 large_file.c':
+      12,345.67 msec task-clock                #   1.00 CPUs utilized
+           5,234  context-switches             #   0.424 K/sec
+              23  page-faults                  #   0.002 K/sec
+    45,678,901,234  cycles                     #   3.70 GHz
+    89,012,345,678  instructions               #   1.95 insn per cycle
+     3,456,789,012  branch-misses              #   5.67% of all branches</code></pre>
+
+        <p>使用 <code>perf stat</code> 可以快速了解编译器的<strong>宏观性能特征</strong>：IPC（每周期指令数）偏低可能意味着有大量缓存未命中；分支误预测率高说明编译器代码中存在难以预测的控制流。这些问题通常提示你需要关注数据结构的内存布局或重构热点路径上的条件分支。</p>
+
+        <h3>callgrind 调用图</h3>
+
+        <p>Valgrind 的 <code>callgrind</code> 工具可以生成详细的函数级调用图和指令计数：</p>
+
+        <pre><code># 用 callgrind 分析编译过程
+$ valgrind --tool=callgrind clang -O2 large_file.c -o large_file.o
+
+# 使用 kcachegrind 可视化分析
+$ kcachegrind callgrind.out.&lt;pid&gt;
+
+# 查看函数级别的指令计数
+$ callgrind_annotate callgrind.out.&lt;pid&gt; --auto=yes | head -100</code></pre>
+
+        <p>在编译器开发中，callgrind 最常见的用途是：查看某个 Pass 占用了多少 CPU 指令，以及它内部哪些函数是热点。对于 LLVM 这样的巨型项目，你可能发现某个看似简单的 Pass（比如 <code>InstCombine</code>）消耗了总编译时间的 20% 以上——这时你就知道该把优化精力投向哪里了。</p>
+
+        <h3>编译器自身的性能瓶颈</h3>
+
+        <p>多年来的编译器性能分析经验暴露了一些<strong>反复出现</strong>的性能瓶颈：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>瓶颈类型</th>
+                    <th>典型特征</th>
+                    <th>常见位置</th>
+                    <th>优化方向</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>内存分配</td>
+                    <td>频繁 malloc/free</td>
+                    <td>词法分析、AST 构建</td>
+                    <td>使用 Arena Allocator、对象池</td>
+                </tr>
+                <tr>
+                    <td>哈希表查找</td>
+                    <td>大量符号表查询</td>
+                    <td>语义分析、类型检查</td>
+                    <td>使用 DenseMap、优化哈希函数</td>
+                </tr>
+                <tr>
+                    <td>Pass 重复遍历</td>
+                    <td>同样的 IR 被多次遍历</td>
+                    <td>优化管线</td>
+                    <td>合并 Pass、使用分析结果缓存</td>
+                </tr>
+                <tr>
+                    <td>小对象频繁析构</td>
+                    <td>shared_ptr/unique_ptr 开销</td>
+                    <td>IR 节点管理</td>
+                    <td>使用 BumpPtrAllocator + 手动管理</td>
+                </tr>
+                <tr>
+                    <td>容器复制</td>
+                    <td>小向量频繁复制</td>
+                    <td>指令选择、寄存器分配</td>
+                    <td>使用 SmallVector 优化栈上分配</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="tip">
+            <strong>LLVM 的性能哲学：</strong>LLVM 项目在性能工程上投入巨大。其代码库大量使用 <code>SmallVector</code>（小数据在栈上分配，大数据自动切换到堆）、<code>DenseMap</code>（内存紧凑的哈希表）、<code>BumpPtrAllocator</code>（连续批量分配，一次整体释放）等自定义数据结构。如果你在开发自己的编译器，建议直接借鉴 LLVM 的这些设计模式——它们是在数十年的性能调优中打磨出来的最佳实践。
+        </div>
+
+        <h2>SPEC CPU 基准测试</h2>
+
+        <p>编译器优化得好不好，不能靠"我觉得"来判断——需要<strong>客观、可重复、业界公认</strong>的基准测试。SPEC CPU 就是这样一个标准。</p>
+
+        <h3>SPEC CPU 是什么</h3>
+
+        <p><strong>SPEC（Standard Performance Evaluation Corporation）</strong>是一个非营利组织，它制定了一系列用于评估计算机系统性能的标准基准测试程序。SPEC CPU 套件包含一系列<strong>真实世界的应用程序</strong>（而非合成测试），涵盖科学计算、图像处理、编译器本身、物理模拟等领域：</p>
+
+        <ul>
+            <li><strong>SPECint（SPEC CINT）</strong>：整数性能测试，包括 GCC 编译器、Perl 解释器、量子计算模拟等</li>
+            <li><strong>SPECfp（SPEC CFP）</strong>：浮点性能测试，包括气象模拟、分子动力学、图像渲染等</li>
+        </ul>
+
+        <p>测试时，用待评估的编译器编译这些程序，然后在标准平台上运行，记录执行时间。编译器产出的代码质量直接体现在运行时间上——同一个程序，优化更好的编译器生成的可执行文件运行得更快。</p>
+
+        <h3>编译器性能评估标准</h3>
+
+        <p>使用 SPEC CPU 评估编译器时，通常关注以下指标：</p>
+
+        <pre><code># 1. 编译时性能（compile-time performance）
+# 记录不同优化级别下的编译时间
+$ time clang -O0 spec_program.c -o spec_program
+$ time clang -O2 spec_program.c -o spec_program
+$ time clang -O3 spec_program.c -o spec_program
+
+# 2. 运行时性能（runtime performance）
+# 程序的执行时间（越小越好）
+$ time ./spec_program
+  real    0m12.345s   # 真实经过时间
+  user    0m12.100s   # 用户态 CPU 时间
+  sys     0m0.200s    # 内核态 CPU 时间
+
+# 3. SPEC Ratio（归一化性能分数）
+# 基准时间 / 实测时间 × 100（越大越好）
+# 若基准参考时间为 1000 秒，实测为 500 秒
+# SPEC Ratio = 1000 / 500 × 100 = 200</code></pre>
+
+        <p>假设我们要对比 Clang 和 GCC 在 SPECint 2017 上的表现，典型的结果可能如下：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>基准程序</th>
+                    <th>领域</th>
+                    <th>GCC -O3</th>
+                    <th>Clang -O3</th>
+                    <th>差距</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>500.perlbench_r</td>
+                    <td>Perl 解释器</td>
+                    <td>10.2s</td>
+                    <td>9.8s</td>
+                    <td>Clang 快 4%</td>
+                </tr>
+                <tr>
+                    <td>502.gcc_r</td>
+                    <td>GCC 编译器</td>
+                    <td>8.5s</td>
+                    <td>9.1s</td>
+                    <td>GCC 快 7%</td>
+                </tr>
+                <tr>
+                    <td>505.mcf_r</td>
+                    <td>网络流优化</td>
+                    <td>12.7s</td>
+                    <td>11.2s</td>
+                    <td>Clang 快 12%</td>
+                </tr>
+                <tr>
+                    <td>523.xalancbmk_r</td>
+                    <td>XML 处理</td>
+                    <td>15.3s</td>
+                    <td>14.1s</td>
+                    <td>Clang 快 8%</td>
+                </tr>
+                <tr>
+                    <td>525.x264_r</td>
+                    <td>视频编码</td>
+                    <td>6.8s</td>
+                    <td>7.0s</td>
+                    <td>GCC 快 3%</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="highlight">
+            <strong>性能评估的黄金法则：</strong>只看一个基准程序的结果是危险的——编译器可能会针对某个特定模式做优化而在其他模式上退步。可靠的评估需要覆盖多种类型的程序（整数/浮点、计算密集/内存密集、大代码/小代码），并且在统计上显著的结果（至少运行三次取中位数，检查方差）。LLVM 社区维护着一个名为 <code>llvm-compile-time-tracker</code> 的持续性能追踪系统，每次提交都会在 SPEC 和 LLVM 测试套件上运行性能回归测试。
+        </div>
+
+        <h2>编译器 Fuzz 测试</h2>
+
+        <p>编译器是非常复杂的软件，传统的单元测试只能覆盖有限的输入空间。Fuzz 测试（模糊测试）通过<strong>自动生成大量随机（或变异）输入</strong>来探索编译器的行为边界，是发现编译器 Bug 最有效的方法之一。</p>
+
+        <h3>CSmith：随机 C 程序生成</h3>
+
+        <p><strong>CSmith</strong> 是专门用于测试 C 编译器的随机程序生成器。它生成的 C 程序具有以下特征：</p>
+
+        <ul>
+            <li><strong>语法正确：</strong>每个生成程序都能通过词法和语法分析</li>
+            <li><strong>语义确定：</strong>程序的行为是定义良好的，没有未定义行为（UB）</li>
+            <li><strong>检查简单：</strong>程序会计算一个"校验和"，运行后与预期结果对比</li>
+        </ul>
+
+        <pre><code># 1. 用 CSmith 生成随机 C 程序
+$ csmith --no-checks -o test.c
+$ wc -l test.c
+789 test.c
+
+# 2. 用不同编译器编译并运行
+$ gcc -O2 test.c -o test_gcc && ./test_gcc
+Checksum = 0xABCD1234
+
+$ clang -O2 test.c -o test_clang && ./test_clang
+Checksum = 0xABCD1234   # 一致，说明两个编译器行为相同
+
+# 如果发现校验和不一致，说明编译器之间存在差异
+# 这通常意味着至少一个编译器有 Bug
+
+# 3. 缩小到最简用例（用 C-Reduce）
+$ creduce --not-crash test.c interestingness_test.sh
+# interestingness_test.sh 判断"clang 和 gcc 输出不一致"
+# creduce 会逐步删除不相关的代码，保留最小的可复现用例
+
+# 4. 将最小化后的用例报告给编译器团队</code></pre>
+
+        <p>CSmith 的使用方法是"差分测试"（Differential Testing）：用多个不同的编译器（或同一编译器的不同优化级别）编译同一个随机程序，比较它们的运行结果。如果结果不一致，就说明至少其中一个编译器有 Bug。</p>
+
+        <div class="warning">
+            <strong>重要注意事项：</strong>CSmith 生成的程序故意<strong>不包含未定义行为</strong>。这是差分测试的前提——因为如果程序包含 UB，不同的编译器可以合法地产生不同的结果，那就不能叫做 Bug 了。LLVM 社区曾用 CSmith 在 Clang/LLVM 中发现了 <strong>数百个 Bug</strong>，其中很多是直接影响正确性的严重问题。可以说 CSmith 是 LLVM 项目历史上最有价值的测试工具之一。
+        </div>
+
+        <h3>C-Reduce：错误用例最小化</h3>
+
+        <p>CSmith 生成的测试程序通常有几百到上千行，直接去分析 Bug 原因非常困难。<strong>C-Reduce</strong> 的作用就是自动<strong>缩减</strong>测试用例，同时保留触发 Bug 的必要特征：</p>
+
+        <pre><code># interestingness_test.sh —— 定义什么是"感兴趣的"行为
+#!/bin/bash
+clang -O2 test.c -o test_clang 2>/dev/null || exit 1
+gcc -O2 test.c -o test_gcc 2>/dev/null || exit 1
+./test_clang > clang_out.txt 2>/dev/null || exit 1
+./test_gcc > gcc_out.txt 2>/dev/null || exit 1
+# 如果输出不一致，就是感兴趣的
+diff clang_out.txt gcc_out.txt > /dev/null 2>&1
+test $? -eq 1</code></pre>
+
+        <pre><code># 运行 C-Reduce（可能需要数分钟到数小时）
+$ creduce --tidy interestingness_test.sh test.c
+
+# C-Reduce 会反复尝试删除代码片段、简化表达式、
+# 合并变量等变换，每次检查是否仍能触发"感兴趣"的条件
+# 最终输出一个最小化的 test.c（可能只有 10-30 行）
+
+# 这时的 test.c 就是最小可复现用例
+# 提交给编译器开发者时，他们会非常感谢
+# 你提供了一个极简的、不依赖外部库的复现步骤</code></pre>
+
+        <p>C-Reduce 的简化策略包括：删除无关的全局变量、删除不触发 Bug 的函数、简化控制流（将 if/while 替换为更简单的形式）、将复杂的表达式逐步替换为常量。其核心思想是<strong>二分搜索式地缩小程序</strong>——不断尝试："删掉这一段，Bug 还在不在？如果还在，就永久删除；如果不在了，就保留。"</p>
+
+        <h3>libFuzzer：进程内覆盖引导 Fuzz</h3>
+
+        <p>LLVM 项目自身提供了 <code>libFuzzer</code>——一个进程内、覆盖引导的 Fuzz 测试库。它特别适合测试编译器内部函数（比如 IR 解析器、Pass 的输入验证等）：</p>
+
+        <pre><code>// LLVM Pass 的 Fuzz 测试入口
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+extern "C" int LLVMFuzzerTestOneInput(
+    const uint8_t *Data, size_t Size) {
+
+    // 将 Fuzz 输入视为 LLVM IR 文本
+    llvm::SMDiagnostic Err;
+    auto M = parseIR(llvm::MemoryBufferRef(
+        StringRef((const char*)Data, Size), "fuzz-input"), Err);
+
+    if (!M) return 0;  // 解析失败不算 Bug
+
+    // 尝试在模块上运行 Pass 管线
+    llvm::PassBuilder PB;
+    llvm::ModulePassManager MPM =
+        PB.buildPerModuleDefaultPipeline(
+            llvm::OptimizationLevel::O2);
+
+    MPM.run(*M, MAM);
+
+    return 0;  // 如果运行到这里没有崩溃，pass
+}</code></pre>
+
+        <pre><code># 用 libFuzzer 测试 LLVM Pass
+$ clang++ -fsanitize=fuzzer,address \
+    FuzzLLVMPass.cpp \
+    `llvm-config --cxxflags --ldflags --libs` \
+    -o fuzz_llvm_pass
+
+# 运行 Fuzz（使用种子语料库）
+$ mkdir corpus
+$ cp some_valid_ir.ll corpus/
+$ ./fuzz_llvm_pass corpus/
+
+# libFuzzer 会不断变异输入，探索新的代码路径
+# 发现崩溃时会保存对应输入到 crash-* 文件
+$ ls crash-*
+crash-0a1b2c3d4e5f...</code></pre>
+
+        <p>libFuzzer 的"覆盖引导"机制意味着它会优先选择那些能覆盖新代码路径的输入。这让它能够深入编译器的深层逻辑，而不仅仅停留在表层解析器上。LLVM 项目自身维护着数十个 Fuzz 测试入口，覆盖 IR 解析、汇编解析、Pass 管线等关键组件。</p>
+
+        <h2>性能回归检测</h2>
+
+        <p>编译器开发中最令人头疼的问题不是"性能差"，而是<strong>"昨天还好好的，今天怎么就慢了"</strong>。性能回归（Performance Regression）是编译器开发中不可避免的现象——一个看似无害的提交可能因为某个优化 Pass 的改动而意外导致生成的代码质量下降。</p>
+
+        <h3>Bisect 定位性能回归 Commit</h3>
+
+        <p>当发现性能异常时，<code>git bisect</code> 是定位引入回归的 commit 的标准工具：</p>
+
+        <pre><code># bisect.bash —— git bisect 的辅助脚本
+#!/bin/bash
+# 编译 LLVM 并用 SPEC 测试性能
+cd /path/to/llvm-project
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
+ninja clang opt
+
+# 编译 SPEC 基准程序并测量
+/opt/SPEC2017/bin/runcpu --config=clang-test intspeed
+# 提取 SPEC Ratio
+RESULT=$(grep "SPEC Ratio" result.log | awk '{print $NF}')
+
+# 如果性能低于阈值（比如 < 98% 基线），返回 1（bad）
+THRESHOLD=98.0
+BASELINE=100.0
+
+python3 -c "
+import sys
+ratio = float('$RESULT')
+print(f'SPEC Ratio: {ratio}')
+if ratio < $THRESHOLD:
+    print('REGRESSION DETECTED')
+    sys.exit(1)
+else:
+    print('OK')
+    sys.exit(0)
+"</code></pre>
+
+        <pre><code># 开始 bisect
+$ git bisect start
+$ git bisect good v15.0.0   # 已知性能正常的版本
+$ git bisect bad main        # 当前有问题的版本
+
+# Git 会自动 checkout 中间的 commit
+# 编译并测试，然后标记好坏
+$ ninja clang opt && ./run_spec.sh
+$ git bisect good  # 或 git bisect bad
+
+# 重复直到定位到首个引入回归的 commit
+# 大约需要 log2(N) 步，N 是 commit 数量</code></pre>
+
+        <h3>性能跟踪 CI</h3>
+
+        <p>手动 bisect 虽然能解决问题，但更好的方法是<strong>在 CI 中自动检测性能回归</strong>。LLVM 社区的 <code>llvm-performance-tracker</code> 就是这样一个系统：</p>
+
+        <pre><code># 在 CI pipeline 中集成性能测试
+# .github/workflows/performance.yml
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compiler
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+      - name: Run microbenchmarks
+        run: |
+          # 运行编译器的微基准测试
+          ./build/bin/llvm-exegesis --benchmarks=all
+      - name: Compare with baseline
+        run: |
+          # 与前一次成功构建对比
+          ./compare_bench.py \
+            --current results.json \
+            --baseline baseline.json \
+            --threshold 2.0  # 超过 2% 的退化报警</code></pre>
+
+        <h3>-fbenchmark-compare 与 LNT</h3>
+
+        <p>LLVM 项目早期使用 <strong>LNT（LLVM Nightly Tests）</strong> 来做性能跟踪。LNT 会自动在每日构建上运行 SPEC 和测试套件，将结果记录在数据库中，并通过 Web 界面展示性能趋势。每当性能出现回归，LNT 会发送邮件告警，并尝试用 bisect 自动定位责任人。</p>
+
+        <div class="highlight">
+            <strong>性能回归检测的核心原则：</strong>性能回归检测不是"跑一次看结果"，而是<strong>建立持续的性能基线</strong>。你需要关注的是"趋势"而不是绝对值——因为硬件环境的变化、系统库的版本差异都会影响绝对值。一个好的性能跟踪系统会：记录每次 benchmark 的完整环境信息（CPU 频率、内存配置、内核版本）; 使用中位数而非平均值来抵抗噪声; 设置合理的告警阈值（2-5%）防止误报; 自动关联性能波动与代码改动。
+        </div>
+
+        <h2>实战：使用 llvm-lit 进行编译器测试</h2>
+
+        <p>LLVM 自带了一套强大的测试框架 <code>llvm-lit</code>。理解它的用法能显著提升你开发编译器的效率：</p>
+
+        <pre><code># 1. 编写一个简单的测试文件
+# test/Transforms/MyPass/my_test.ll
+; RUN: opt -passes=my-pass -S %s | FileCheck %s
+; 测试 MyPass 是否正确消除了冗余加载
+
+define i32 @test_redundant_load(i32* %ptr) {
+; CHECK-LABEL: @test_redundant_load
+; CHECK: %val = load i32, i32* %ptr
+; CHECK-NEXT: ret i32 %val
+; (MyPass 应该消除第二个冗余的 load)
+
+entry:
+    %val1 = load i32, i32* %ptr
+    %val2 = load i32, i32* %ptr   ; 冗余的 load
+    ret i32 %val1
+}
+
+# 2. 运行测试
+$ llvm-lit test/Transforms/MyPass/
+-- Testing: 1 tests, 1 threads --
+PASS: test/Transforms/MyPass/my_test.ll (1 of 1)
+
+# 3. 使用 UpdateTestChecks 自动生成 CHECK 行
+$ opt -passes=my-pass -S my_test.ll | \
+    FileCheck my_test.ll --check-prefix=CHECK
+
+# 4. 验证 Pass 不会导致编译器崩溃
+; RUN: opt -passes=my-pass -disable-output %s 2>&1
+; REQUIRES: asserts
+; 如果 crash，测试失败</code></pre>
+
+        <p>这种"测试即文档"的方式是编译器开发的最佳实践。每个新功能或 Bug 修复都应该附带一个 <code>llvm-lit</code> 测试用例，它既是回归测试，也向其他开发者展示了这个 Pass 的预期行为。</p>
+
+        <h2>本章小结</h2>
+
+        <p>这一章我们从三个层面深入探讨了编译器的调试与性能分析。在性能分析层面，我们学习了使用 perf、callgrind 等工具定位编译器的性能热点，了解了编译器常见的五大性能瓶颈及其优化方向。在基准测试层面，我们认识了 SPEC CPU 这一业界标准，理解了如何科学地评估编译器的代码生成质量。在 Fuzz 测试层面，我们掌握了 CSmith 和 C-Reduce 的使用方法，以及如何用 libFuzzer 对编译器进行覆盖引导的模糊测试。最后，我们讨论了自动化性能回归检测的重要性，以及如何用 git bisect 定位引入性能回退的 commit。</p>
+
+        <p>一个编译器的质量不仅仅取决于它能生成多么高效的代码，更取决于它<strong>在多长时间内、在多大范围的输入上、能稳定地生成正确的代码</strong>。养成写测试、做基准、跑 Fuzz 的习惯，是编译器开发者从"能做"迈向"能做可靠"的必经之路。下一章我们将把视野投向编译技术的未来——MLIR 框架如何将编译器的分层设计思想推广到更广阔的领域，以及现代编译器正在向哪些方向演进。敬请期待第26章。</p>
+
+        <div class="footer-nav">
+            <a href="24.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="26.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>

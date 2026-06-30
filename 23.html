@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
+    <title>第23章 LLVM工具链实战</title>
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="double-border">
+<div class="container">
+    <div class="sidebar">
+        <h3>🔧 课程目录</h3>
+        <ul class="chapter-list">
+            <li><a href="01.html">第1章 编译原理概述</a></li>
+            <li><a href="02.html">第2章 编译器的历史演进</a></li>
+            <li><a href="03.html">第3章 词法分析基础</a></li>
+            <li><a href="04.html">第4章 词法分析器实现</a></li>
+            <li><a href="05.html">第5章 语法分析基础</a></li>
+            <li><a href="06.html">第6章 自顶向下语法分析</a></li>
+            <li><a href="07.html">第7章 自底向上语法分析</a></li>
+            <li><a href="08.html">第8章 ANTLR4实战</a></li>
+            <li><a href="09.html">第9章 抽象语法树</a></li>
+            <li><a href="10.html">第10章 语义分析</a></li>
+            <li><a href="11.html">第11章 中间表示(IR)</a></li>
+            <li><a href="12.html">第12章 LLVM IR入门</a></li>
+            <li><a href="13.html">第13章 代码生成</a></li>
+            <li><a href="14.html">第14章 运行时系统</a></li>
+            <li><a href="15.html">第15章 错误处理与诊断</a></li>
+            <li><a href="16.html">第16章 代码优化基础</a></li>
+            <li><a href="17.html">第17章 数据流分析</a></li>
+            <li><a href="18.html">第18章 编译器工程实践</a></li>
+            <li><a href="19.html">第19章 过程间分析与优化</a></li>
+            <li><a href="20.html">第20章 高级优化技术</a></li>
+            <li><a href="21.html">第21章 即时编译(JIT)</a></li>
+            <li><a href="22.html">第22章 静态分析与形式验证</a></li>
+            <li><a href="23.html" class="active">第23章 LLVM工具链实战</a></li>
+            <li><a href="24.html">第24章 用ANTLR+LLVM实现语言</a></li>
+            <li><a href="25.html">第25章 调试与性能分析</a></li>
+            <li><a href="26.html">第26章 MLIR与现代编译</a></li>
+            <li><a href="27.html">第27章 AI与编译器</a></li>
+            <li><a href="28.html">第28章 从零实现完整编译器</a></li>
+        </ul>
+    </div>
+    <div class="main-content">
+
+        <h2>第23章 LLVM工具链实战</h2>
+
+        <p>大家好，我是你们的讲师。在前面的章节中，我们深入探讨了 LLVM IR 的语法和语义，学习了如何将源代码转换为中间表示。但 LLVM 不仅仅是一个 IR 规范——它更是一整套<strong>工业级编译器工具链</strong>。如果你只在概念层面理解 LLVM，而没有亲手操作过它的工具，那就好比学会了游泳的理论却从未下过水。</p>
+
+        <p>这一章我们将卷起袖子，实地操作 LLVM 工具链中的每一个核心工具：<code>clang</code>（前端编译器）、<code>opt</code>（IR 优化器）、<code>llc</code>（目标代码生成器）、<code>lli</code>（IR 解释器/JIT 执行器），以及<strong>TableGen</strong>（领域特定代码生成器）。你还会学到如何开发自己的 LLVM Pass——这是 LLVM 生态中最强大的扩展机制之一。学完本章，你将能够像老手一样驾轻就熟地操作 LLVM 的每一条"生产线"。</p>
+
+        <h2>Clang 工具链全景</h2>
+
+        <p>Clang 是 LLVM 官方的 C/C++/Objective-C 前端，它不仅是一个编译器，更是一个完整的<strong>语言工具链</strong>。Clang 的设计哲学是"库化"——它的每个功能模块都以库的形式提供，可以被其他工具复用。因此，围绕着 Clang 衍生出了一系列强大的子工具。</p>
+
+        <h3>clang -E：预处理</h3>
+
+        <p><code>clang -E</code> 只运行预处理阶段，输出展开后的源代码。这对于调试宏定义和头文件包含问题非常有用：</p>
+
+        <pre><code>// 示例源文件：hello.c
+#include &lt;stdio.h&gt;
+#define GREETING "Hello, Compiler!"
+
+int main() {
+    printf("%s\n", GREETING);
+    return 0;
+}</code></pre>
+
+        <p>运行 <code>clang -E hello.c</code> 会输出预处理后的结果——<code>#include &lt;stdio.h&gt;</code> 被替换为头文件的全部内容，<code>GREETING</code> 被展开为字符串字面量。输出通常有几百到上千行（取决于标准库头文件的大小）。配合 <code>-C</code>（保留注释）和 <code>-P</code>（去掉行标记）选项，可以更清晰地查看结果。</p>
+
+        <h3>clang -fsyntax-only：语法检查</h3>
+
+        <p><code>clang -fsyntax-only</code> 执行词法分析、语法分析和语义分析，但不生成任何代码。这是最快的"我的代码有没有问题"检查方式，通常用于 IDE 的实时语法检查和 CI 的快速验证：</p>
+
+        <pre><code>$ clang -fsyntax-only -Wall -Wextra hello.c
+hello.c:7:14: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+    printf("%d\n", 42L);
+             ~~      ^
+             %ld</code></pre>
+
+        <p>它提供的诊断信息比 GCC 更加清晰、易于理解——这也是 Clang 早年脱颖而出的关键优势之一。</p>
+
+        <h3>clang-format：代码格式化</h3>
+
+        <p><code>clang-format</code> 是基于 Clang 的 AST 的代码格式化工具。与传统的基于正则表达式的格式化工具不同，它真正<strong>理解代码的结构</strong>，因此格式化结果更加可靠：</p>
+
+        <pre><code># 格式化单个文件（默认使用 LLVM 风格）
+$ clang-format -i messy.c
+
+# 使用 Google 风格
+$ clang-format -i --style=Google messy.c
+
+# 生成自定义配置文件
+$ clang-format --style=LLVM --dump-config &gt; .clang-format</code></pre>
+
+        <p><code>.clang-format</code> 文件可以纳入版本控制，这样团队中的每个人都使用相同的格式规范。常见的风格预设包括 LLVM、Google、Chromium、Mozilla、WebKit 等。</p>
+
+        <h3>clang-tidy：静态分析</h3>
+
+        <p><code>clang-tidy</code> 是 Clang 生态中最受欢迎的<strong>静态分析工具</strong>。它基于 Clang 的 AST 运行一系列检查器（checker），发现代码中的潜在问题：</p>
+
+        <pre><code># 运行所有现代 C++ 相关的检查
+$ clang-tidy -checks='modernize-*' source.cpp
+
+# 检查并自动修复
+$ clang-tidy -checks='modernize-use-auto' -fix source.cpp
+
+# 常见的检查类别
+# bugprone-*   : 容易出错的模式
+# performance-*: 性能相关
+# readability-*: 可读性建议
+# cppcoreguidelines-*: C++ Core Guidelines 检查</code></pre>
+
+        <div class="tip">
+            <strong>小技巧：</strong>在实际项目中，建议将 <code>clang-format</code> 和 <code>clang-tidy</code> 集成到 pre-commit hook 中。这样每个 commit 都会自动格式化代码并运行静态分析，确保代码库始终保持一致的质量标准。
+        </div>
+
+        <h2>opt 与 Pass 管线</h2>
+
+        <p><code>opt</code> 是 LLVM 的<strong>IR 优化器</strong>，它是整个 LLVM 工具链中最强大的工具之一。它读取 LLVM IR（.ll 或 .bc 文件），在其上运行一系列的 Pass，然后输出优化后的 IR。理解 opt 的工作机制，是掌握 LLVM 优化管线的关键。</p>
+
+        <h3>opt -passes=：指定优化管线</h3>
+
+        <p>你可以用 <code>-passes=</code> 参数精确控制要运行的 Pass 序列：</p>
+
+        <pre><code># 运行标准的 -O2 优化管线
+$ opt -passes=default&lt;O2&gt; input.ll -o output.bc
+
+# 手动指定 Pass 序列
+$ opt -passes=instcombine,gvn,simplifycfg input.ll -S -o output.ll
+
+# 查看 IR 的 Pass 分析结果
+$ opt -passes=print-callgraph input.ll -S 2>/dev/null
+
+# 运行指定的分析 Pass 并打印结果
+$ opt -passes=aa-eval input.ll -S -aa-eval-print 2>&1 | head -50</code></pre>
+
+        <p>常用的 Pass 名称包括：</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Pass 名称</th>
+                    <th>类型</th>
+                    <th>功能</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>instcombine</code></td>
+                    <td>Transformation</td>
+                    <td>指令级别的代数化简和强度削弱</td>
+                </tr>
+                <tr>
+                    <td><code>gvn</code></td>
+                    <td>Transformation</td>
+                    <td>全局值编号，消除冗余计算</td>
+                </tr>
+                <tr>
+                    <td><code>simplifycfg</code></td>
+                    <td>Transformation</td>
+                    <td>简化控制流图，合并基本块</td>
+                </tr>
+                <tr>
+                    <td><code>licm</code></td>
+                    <td>Transformation</td>
+                    <td>循环不变式外提</td>
+                </tr>
+                <tr>
+                    <td><code>dce</code></td>
+                    <td>Transformation</td>
+                    <td>死代码消除</td>
+                </tr>
+                <tr>
+                    <td><code>inline</code></td>
+                    <td>Transformation</td>
+                    <td>函数内联</td>
+                </tr>
+                <tr>
+                    <td><code>loop-vectorize</code></td>
+                    <td>Transformation</td>
+                    <td>循环向量化</td>
+                </tr>
+                <tr>
+                    <td><code>aa-eval</code></td>
+                    <td>Analysis</td>
+                    <td>别名分析评估</td>
+                </tr>
+                <tr>
+                    <td><code>domtree</code></td>
+                    <td>Analysis</td>
+                    <td>构建支配树</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>PassManager：Pass 的管理框架</h3>
+
+        <p>LLVM 的 Pass 管理框架经历了从 <strong>legacy PassManager</strong> 到 <strong>New Pass Manager (NPM)</strong> 的重大演进。NPM 是 LLVM 14 之后默认采用的架构，它解决了 legacy PM 的几个根本性问题：</p>
+
+        <ul>
+            <li><strong>延迟计算：</strong>Pass 分析结果只在需要时才计算，避免不必要的开销</li>
+            <li><strong>显式依赖：</strong>Pass 之间通过 <code>PreservedAnalyses</code> 机制显式声明对分析结果的保留或失效</li>
+            <li><strong>线程安全：</strong>NPM 设计上考虑了多线程编译场景</li>
+            <li><strong>更清晰的 API：</strong>使用 <code>llvm::FunctionPassManager</code>、<code>llvm::ModulePassManager</code> 等类型明确的 Pass 管理器</li>
+        </ul>
+
+        <h3>Analysis vs Transformation Pass</h3>
+
+        <p>LLVM 中有两大类型的 Pass：</p>
+
+        <p><strong>Analysis Pass（分析型 Pass）</strong>不修改 IR，只<strong>收集信息</strong>。比如 <code>DominatorTreeAnalysis</code> 构建支配树信息，<code>LoopAnalysis</code> 识别循环结构。一个 Transformation Pass 可以通过 <code>getResult&lt;DominatorTreeAnalysis&gt;(F)</code> 来使用这些分析结果。</p>
+
+        <p><strong>Transformation Pass（变换型 Pass）</strong>会<strong>修改 IR</strong>。比如 <code>GVNPass</code> 消除冗余计算、<code>SimplifyCFGPass</code> 简化控制流。Transformation Pass 在运行前会声明需要哪些分析结果，运行后通过 <code>PreservedAnalyses</code> 告知框架哪些分析仍然有效、哪些已失效需要重新计算。</p>
+
+        <div class="highlight">
+            <strong>核心设计思想：</strong>Analysis Pass 是"可缓存的只读信息"，Transformation Pass 是"消耗分析结果、生成新 IR"的消费者。这种分离使得 Pass 管线既灵活又高效——同一个分析结果可以被多个 Transformation Pass 共享，只有当 IR 被修改且影响该分析时才会触发重新计算。
+        </div>
+
+        <h2>自定义 LLVM Pass 开发</h2>
+
+        <p>LLVM 最强大的特性之一就是它的<strong>可扩展性</strong>——你可以编写自己的 Pass 来执行自定义的变换或分析。无论你是想要实现一个专有的优化算法，还是在编译器层面做代码插桩，自定义 Pass 都是首选方案。</p>
+
+        <h3>Pass 插件框架</h3>
+
+        <p>LLVM 支持将 Pass 编译为<strong>共享库（.so）</strong>，通过 <code>opt -load-pass-plugin</code> 动态加载，无需重新编译整个 LLVM：</p>
+
+        <pre><code>// MyPass.cpp —— 一个简单的 FunctionPass
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Support/raw_ostream.h"
+
+using namespace llvm;
+
+namespace {
+
+class MyFunctionPass : public PassInfoMixin&lt;MyFunctionPass&gt; {
+public:
+    PreservedAnalyses run(Function &amp;F, FunctionAnalysisManager &amp;AM) {
+        errs() &lt;&lt; "处理函数: " &lt;&lt; F.getName() &lt;&lt; "\n";
+
+        for (auto &amp;BB : F) {
+            for (auto &amp;I : BB) {
+                // 统计指令数量
+                errs() &lt;&lt; "  指令: " &lt;&lt; I.getOpcodeName() &lt;&lt; "\n";
+            }
+        }
+
+        // 没有修改 IR，所有分析结果都保留
+        return PreservedAnalyses::all();
+    }
+};
+
+} // anonymous namespace
+
+// 注册 Pass 插件
+extern "C" PassPluginLibraryInfo llvmGetPassPluginInfo() {
+    return {
+        LLVM_PLUGIN_API_VERSION,
+        "MyFunctionPass",
+        "0.1",
+        [](PassBuilder &amp;PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, FunctionPassManager &amp;FPM,
+                   ArrayRef&lt;PassBuilder::PipelineElement&gt;) {
+                    if (Name == "my-function-pass") {
+                        FPM.addPass(MyFunctionPass());
+                        return true;
+                    }
+                    return false;
+                });
+        }
+    };
+}</code></pre>
+
+        <p>编译和运行这个插件 Pass：</p>
+
+        <pre><code># 编译为共享库
+$ clang++ -shared -fPIC -o MyPass.so MyPass.cpp \
+    `llvm-config --cxxflags --ldflags --libs`
+
+# 使用 opt 加载并运行
+$ opt -load-pass-plugin=./MyPass.so \
+      -passes=my-function-pass input.ll -S -o output.ll</code></pre>
+
+        <h3>ModulePass 与 FunctionPass</h3>
+
+        <p>LLVM 支持不同粒度的 Pass：</p>
+
+        <ul>
+            <li><strong>ModulePass</strong>：作用在整个编译单元（Module）级别，可以访问所有全局变量和函数。适合进行全局优化，如符号重命名、全局变量合并。</li>
+            <li><strong>FunctionPass</strong>：逐函数执行，每个函数独立处理。这是最常用的 Pass 类型，因为大多数优化都是函数本地的。</li>
+            <li><strong>LoopPass</strong>：作用在每个循环上，用于循环优化。</li>
+            <li><strong>CallGraphSCCPass</strong>：按调用图的强连通分量遍历，适合过程间分析。</li>
+        </ul>
+
+        <h3>LLVM Pass Builder</h3>
+
+        <p><code>PassBuilder</code> 是 New Pass Manager 中用于<strong>构建 Pass 管线</strong>的核心类。它提供了与 <code>-O1</code>、<code>-O2</code>、<code>-O3</code>、<code>-Os</code> 等优化级别对应的默认管线：</p>
+
+        <pre><code>PassBuilder PB;
+LoopAnalysisManager LAM;
+FunctionAnalysisManager FAM;
+CGSCCAnalysisManager CGAM;
+ModuleAnalysisManager MAM;
+
+// 注册所有分析 Pass
+PB.registerModuleAnalyses(MAM);
+PB.registerFunctionAnalyses(FAM);
+PB.registerLoopAnalyses(LAM);
+PB.registerCGSCCAnalyses(CGAM);
+PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+// 构建 -O2 级别的 ModulePassManager
+ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(
+    OptimizationLevel::O2);
+
+// 运行 Pass 管线
+MPM.run(Module, MAM);</code></pre>
+
+        <p>如果你想在自定义的工具中嵌入 LLVM 优化管线，<code>PassBuilder</code> 是你需要熟悉的核心 API。它本质上是一个"工厂"——根据优化级别和用户指定的 Pass 名称字符串，自动构建出完整的 Pass 管线。</p>
+
+        <div class="warning">
+            <strong>实战提醒：</strong>编写自定义 Pass 时，最容易被忽视的是 <code>PreservedAnalyses</code> 的正确设置。如果你的 Pass 修改了 IR 但没有正确标记哪些分析失效了，后续 Pass 可能基于过时的分析结果做出错误决策。这会导致非常难以调试的"无声"错误——代码仍能运行，但生成的代码可能有性能倒退甚至正确性问题。
+        </div>
+
+        <h2>TableGen 后端描述</h2>
+
+        <p>TableGen 是 LLVM 中一个常被忽略但极其重要的组件。它是一种<strong>领域特定语言（DSL）</strong>，用于描述目标架构的各种属性——指令格式、寄存器、调用约定等。然后 TableGen 工具会从这些描述中自动生成 C++ 代码，大大减少了编写后端的工作量。</p>
+
+        <h3>指令定义（.td 文件）</h3>
+
+        <p>以 RISC-V 架构为例，一个简单的指令定义示例如下：</p>
+
+        <pre><code>// RISCVInstrInfo.td（简化版）
+// 定义 RISC-V 的寄存器类
+def GPR : RegisterClass&lt;"RISCV", i32, 0,
+    (add X0, X1, X2, X3, X4, X5, ...)&gt;;
+
+// 定义指令格式
+class RVInst&lt;dag outs, dag ins, string opcodestr, bits&lt;32&gt; opcode&gt;
+    : Instruction {
+    let OutOperandList = outs;
+    let InOperandList = ins;
+    let AsmString = opcodestr;
+    let Size = 4;  // 32位指令
+}
+
+// 定义具体的 ADD 指令
+def ADD : RVInst&lt;
+    (outs GPR:$rd),      // 输出：目标寄存器
+    (ins GPR:$rs1, GPR:$rs2),  // 输入：两个源寄存器
+    "add $rd, $rs1, $rs2",     // 汇编字符串
+    0x33&gt;;                     // opcode
+
+// 定义 ADDI（立即数加法）
+def ADDI : RVInst&lt;
+    (outs GPR:$rd),
+    (ins GPR:$rs1, i32imm:$imm12),
+    "addi $rd, $rs1, $imm12",
+    0x13&gt;;</code></pre>
+
+        <h3>寄存器描述</h3>
+
+        <p>寄存器描述定义了目标架构的所有寄存器及其属性：</p>
+
+        <pre><code>// RISCVRegisterInfo.td（简化版）
+// 定义寄存器类 GPR（通用寄存器）
+def X0 : RISCVReg&lt;0, "zero"&gt;;  // x0 永远是零
+def X1 : RISCVReg&lt;1, "ra"&gt;;    // 返回地址
+def X2 : RISCVReg&lt;2, "sp"&gt;;    // 栈指针
+
+// 将这些寄存器组合成一个寄存器类
+def GPR : RegisterClass&lt;"RISCV", i32, 0,
+    (add X0, X1, X2, X3, X4, X5, X6, X7, X8, X9, X10,
+         X11, X12, X13, X14, X15, X16, X17, X18, X19,
+         X20, X21, X22, X23, X24, X25, X26, X27, X28,
+         X29, X30, X31)&gt; {
+    let RegInfos = RegisterInfo&lt;32, 32&gt;;  // 32个32位寄存器
+}</code></pre>
+
+        <h3>指令选择模式</h3>
+
+        <p>TableGen 还负责描述<strong>指令选择模式</strong>——即如何将 SelectionDAG 中的操作节点映射为目标指令。这部分通过 <code>Pat</code> 类来描述：</p>
+
+        <pre><code>// 指令选择模式：将 DAG 节点映射为具体指令
+// 将一个加法节点（add）和两个寄存器映射为 ADD 指令
+def : Pat&lt;
+    (add GPR:$rs1, GPR:$rs2),
+    (ADD GPR:$rs1, GPR:$rs2)
+&gt;;
+
+// 将 add + imm 映射为 ADDI
+def : Pat&lt;
+    (add GPR:$rs1, (i32 imm:$imm12)),
+    (ADDI GPR:$rs1, imm:$imm12)
+&gt;;
+
+// 将 load + GPR 映射为 LW 指令
+def : Pat&lt;
+    (load GPR:$addr),
+    (LW GPR:$addr, 0)
+&gt;;</code></pre>
+
+        <h3>从 TableGen 到 C++ 代码</h3>
+
+        <p>写好了 <code>.td</code> 文件之后，用 <code>llvm-tblgen</code> 工具就能自动生成 C++ 代码：</p>
+
+        <pre><code># 从 .td 生成指令信息表
+$ llvm-tblgen -gen-instr-info RISCV.td -o RISCVGenInstrInfo.inc
+
+# 生成寄存器信息
+$ llvm-tblgen -gen-register-info RISCV.td -o RISCVGenRegisterInfo.inc
+
+# 生成指令选择器
+$ llvm-tblgen -gen-dag-isel RISCV.td -o RISCVGenDAGISel.inc
+
+# 生成汇编解析器
+$ llvm-tblgen -gen-asm-parser RISCV.td -o RISCVGenAsmParser.inc
+
+# 生成汇编打印器
+$ llvm-tblgen -gen-asm-writer RISCV.td -o RISCVGenAsmWriter.inc</code></pre>
+
+        <p>生成的 <code>.inc</code> 文件会被 <code>#include</code> 到后端的 C++ 源文件中。一个完整的 LLVM 后端可以生成数万行 C++ 代码，而开发者只需要维护几百行 <code>.td</code> 描述——这就是 TableGen 的威力所在。</p>
+
+        <div class="highlight">
+            <strong>理解 TableGen 的价值：</strong>如果没有 TableGen，为 LLVM 添加一个新的后端（比如一个新的 CPU 架构）将需要手动编写数万行高度重复的 C++ 代码——指令编码表、反汇编表、寄存器分配表等等。TableGen 将这种"声明式描述 → 命令式代码"的转换自动化了，使得 LLVM 能够快速支持数十种目标架构。目前 LLVM 支持的后端超过 30 个（x86、ARM、RISC-V、MIPS、PowerPC 等），每个后端的 .td 文件行数从几千到几万不等。
+        </div>
+
+        <h2>实战演练：完整的 Pass 开发流程</h2>
+
+        <p>让我们把以上知识整合起来，完成一个实际的 Pass 开发流程。假设我们需要编写一个 FunctionPass，它能够<strong>统计并打印每个函数的循环嵌套深度</strong>：</p>
+
+        <pre><code>// LoopDepthPass.cpp
+#include "llvm/IR/Function.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Support/raw_ostream.h"
+
+using namespace llvm;
+
+namespace {
+
+struct LoopDepthPass : public FunctionPass {
+    static char ID;
+    LoopDepthPass() : FunctionPass(ID) {}
+
+    bool runOnFunction(Function &amp;F) override {
+        // 获取 LoopInfo 分析结果
+        LoopInfo &amp;LI = getAnalysis&lt;LoopInfoWrapperPass&gt;().getLoopInfo();
+
+        int maxDepth = 0;
+        for (auto *L : LI) {
+            int d = L-&gt;getLoopDepth();
+            if (d &gt; maxDepth) maxDepth = d;
+        }
+
+        errs() &lt;&lt; "函数 " &lt;&lt; F.getName()
+               &lt;&lt; " 的最大循环深度: " &lt;&lt; maxDepth &lt;&lt; "\n";
+        return false;  // 不修改 IR
+    }
+
+    // 声明需要 LoopInfo 分析
+    void getAnalysisUsage(AnalysisUsage &amp;AU) const override {
+        AU.addRequired&lt;LoopInfoWrapperPass&gt;();
+        AU.setPreservesAll();
+    }
+};
+
+} // anonymous namespace
+
+char LoopDepthPass::ID = 0;
+
+// 注册 Pass（legacy PM 方式）
+static RegisterPass&lt;LoopDepthPass&gt; X(
+    "loop-depth",
+    "计算函数的循环嵌套深度",
+    false,  // 不是 CFG 转换
+    false   // 不是分析器
+);
+
+// 注册插件
+extern "C" PassPluginLibraryInfo llvmGetPassPluginInfo() {
+    return {
+        LLVM_PLUGIN_API_VERSION,
+        "LoopDepthPass",
+        "1.0",
+        [](PassBuilder &amp;PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, FunctionPassManager &amp;FPM,
+                   ArrayRef&lt;PassBuilder::PipelineElement&gt;) {
+                    if (Name == "loop-depth") {
+                        FPM.addPass(LoopDepthPass());
+                        return true;
+                    }
+                    return false;
+                });
+        }
+    };
+}</code></pre>
+
+        <p>开发自定义 Pass 时的典型工作流：</p>
+
+        <ol>
+            <li>编写 Pass 的 C++ 代码，继承自 <code>PassInfoMixin</code>（新 PM）或 <code>FunctionPass</code>（旧 PM）</li>
+            <li>编译为共享库（<code>.so</code>）</li>
+            <li>使用 <code>opt -load-pass-plugin</code> 加载并测试</li>
+            <li>通过 <code>llvm-lit</code>（LLVM 集成测试框架）编写测试用例</li>
+            <li>确认结果正确后，将 Pass 添加到正式的优化管线中</li>
+        </ol>
+
+        <h2>llc 与 lli：代码生成与即时执行</h2>
+
+        <p><strong>llc</strong> 是 LLVM 的<strong>静态代码生成器</strong>，它将 IR 转换为目标平台的汇编代码：</p>
+
+        <pre><code># 生成 x86 汇编
+$ llc input.ll -o input.s
+
+# 生成 ARM 汇编（交叉编译）
+$ llc -march=arm input.ll -o input-arm.s
+
+# 输出 LLVM 的 instruction selection 调试信息
+$ llc -debug-only=isel input.ll -o input.s 2>&1 | head -50
+
+# 查看生成的机器指令（MI 格式）
+$ llc -print-machineinstrs input.ll -o /dev/null 2>&1</code></pre>
+
+        <p><strong>lli</strong> 是 LLVM 的<strong>IR 解释器/JIT 执行器</strong>，它可以直接执行 <code>.ll</code> 或 <code>.bc</code> 文件，无需编译为机器码：</p>
+
+        <pre><code># 直接运行 LLVM IR
+$ lli input.ll
+
+# 启用 JIT 编译（默认）
+$ lli -jit-kind=orc input.ll
+
+# 使用解释模式（不 JIT）
+$ lli -force-interpreter input.ll</code></pre>
+
+        <p><code>lli</code> 特别适合在开发调试阶段快速验证 IR 的正确性——你不需要经过完整的汇编-链接过程就能运行代码。</p>
+
+        <h2>本章小结</h2>
+
+        <p>本章我们走过了一段从"工具用户"到"工具制造者"的旅程。我们首先认识了 Clang 工具链的全景——从预处理到静态分析，每一个子工具都承担着独特的角色。接着深入探索了 <code>opt</code> 和 Pass 管线，理解了 Analysis Pass 和 Transformation Pass 的协作模式。在自定义 Pass 开发部分，我们亲手编写了一个函数级 Pass，并学会了如何将其编译为插件动态加载。最后，我们了解了 TableGen 是如何通过声明式描述来解决后端开发中的代码生成问题的。</p>
+
+        <p>掌握了 LLVM 工具链实战技能之后，你就拥有了驾驭现代编译器基础设施的能力。下一章我们将把视野再提升一个层次——不再是使用现成的工具，而是<strong>用 ANTLR 和 LLVM 从零开始实现一门完整的语言</strong>。这是一个激动人心的旅程，我们将把前端（ANTLR 语法）和后端（LLVM IR/JIT）完整连接起来，打造一个端到端的编译器实现。敬请期待第24章。</p>
+
+        <div class="footer-nav">
+            <a href="22.html">← 上一章</a>
+            <a href="index.html">📖 返回目录</a>
+            <a href="24.html">下一章 →</a>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>
